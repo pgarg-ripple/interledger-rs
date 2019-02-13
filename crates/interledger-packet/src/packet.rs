@@ -144,6 +144,11 @@ impl Prepare {
     }
 
     #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.buffer.as_ref()
+    }
+
+    #[inline]
     pub fn amount(&self) -> u64 {
         self.amount
     }
@@ -274,6 +279,11 @@ impl Fulfill {
         })
     }
 
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.buffer.as_ref()
+    }
+
     /// The returned value always has a length of 32.
     #[inline]
     pub fn fulfillment(&self) -> &[u8] {
@@ -375,6 +385,11 @@ impl Reject {
             message_offset,
             data_offset,
         })
+    }
+
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.buffer.as_ref()
     }
 
     #[inline]
