@@ -18,6 +18,7 @@ impl ErrorCode {
         ErrorCode(bytes)
     }
 
+    #[inline]
     pub fn class(self) -> ErrorClass {
         match self.0[0] {
             b'F' => ErrorClass::Final,
@@ -83,5 +84,10 @@ mod test_error_code {
             ErrorClass::Relative
         );
         assert_eq!(ErrorCode::new(*b"???").class(), ErrorClass::Unknown);
+    }
+
+    #[test]
+    fn test_display() {
+        assert_eq!(format!("{}", ErrorCode::F00_BAD_REQUEST), "F00");
     }
 }
