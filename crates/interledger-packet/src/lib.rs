@@ -4,6 +4,7 @@ mod error;
 mod errors;
 #[cfg(test)]
 mod fixtures;
+pub mod ildcp;
 pub mod oer;
 mod packet;
 

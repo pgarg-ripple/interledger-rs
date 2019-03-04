@@ -30,6 +30,7 @@ quick_error! {
             description(descr)
             display("Wrong Type {}", descr)
         }
+        // TODO &'static str instead of String?
         InvalidPacket(descr: String) {
             description(descr)
             display("Invalid Packet {}", descr)

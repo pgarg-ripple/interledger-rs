@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use bytes::Bytes;
 use futures::future::FutureResult;
 use futures::prelude::*;
 use hyper::Uri;
@@ -10,12 +11,13 @@ use lazy_static::lazy_static;
 use tokio::runtime::Runtime;
 use tokio::timer::Delay;
 
-use super::{NextHop, Route, Service};
+use super::{NextHop, Request, Route, Service};
 
 const EXPIRES_IN: Duration = Duration::from_secs(20);
 
 pub static RECEIVER_ORIGIN: &'static str = "http://127.0.0.1:3001";
 static RECEIVER_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 3001);
+pub static ADDRESS: &'static [u8] = b"test.relay";
 
 lazy_static! {
     pub static ref PREPARE: ilp::Prepare = ilp::PrepareBuilder {
@@ -25,7 +27,18 @@ lazy_static! {
             \x11\x7b\x43\x4f\x1a\x54\xe9\x04\x4f\x4f\x54\x92\x3b\x2c\xff\x9e\
             \x4a\x6d\x42\x0a\xe2\x81\xd5\x02\x5d\x7b\xb0\x40\xc4\xb4\xc0\x4a\
         ",
-        destination: b"test.bob.1234",
+        destination: b"test.alice.1234",
+        data: b"prepare data",
+    }.build();
+
+    pub static ref PREPARE_MULTILATERAL: ilp::Prepare = ilp::PrepareBuilder {
+        amount: 123,
+        expires_at: round_time(SystemTime::now() + EXPIRES_IN),
+        execution_condition: b"\
+            \x11\x7b\x43\x4f\x1a\x54\xe9\x04\x4f\x4f\x54\x92\x3b\x2c\xff\x9e\
+            \x4a\x6d\x42\x0a\xe2\x81\xd5\x02\x5d\x7b\xb0\x40\xc4\xb4\xc0\x4a\
+        ",
+        destination: b"test.relay.1234.5678",
         data: b"prepare data",
     }.build();
 
@@ -47,24 +60,25 @@ lazy_static! {
     pub static ref ROUTES: Vec<Route> = vec![
         Route::new(
             b"test.alice.".to_vec(),
-            NextHop::new(
-                format!("{}/alice", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
-                Some(b"alice_auth".to_vec()),
-            ),
+            NextHop::Unilateral {
+                endpoint: format!("{}/alice", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
+                auth: Some(Bytes::from("alice_auth")),
+            },
         ),
         Route::new(
-            b"test.bob.".to_vec(),
-            NextHop::new(
-                format!("{}/bob", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
-                Some(b"bob_auth".to_vec()),
-            ),
+            b"test.relay.".to_vec(),
+            NextHop::Multilateral {
+                uri_prefix: Bytes::from(format!("{}/bob/", RECEIVER_ORIGIN)),
+                uri_suffix: Bytes::from("/ilp"),
+                auth: Some(Bytes::from("bob_auth")),
+            },
         ),
         Route::new(
             b"".to_vec(),
-            NextHop::new(
-                format!("{}/default", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
-                Some(b"default_auth".to_vec()),
-            ),
+            NextHop::Unilateral {
+                endpoint: format!("{}/default", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
+                auth: Some(Bytes::from("default_auth")),
+            },
         ),
     ];
 }
@@ -100,26 +114,60 @@ impl MockService {
     }
 }
 
-impl Service for MockService {
+impl<Req: Request> Service<Req> for MockService {
     type Future = FutureResult<ilp::Fulfill, ilp::Reject>;
-    fn call(self, prepare: ilp::Prepare) -> Self::Future {
+
+    fn call(self, request: Req) -> Self::Future {
         self.prepares
             .write()
             .unwrap()
-            .push(prepare);
-        self.response.as_ref().clone().into_future()
+            .push(request.into());
+        self.response.as_ref().clone().into()
+    }
+}
+
+/// Wait before responding.
+#[derive(Clone, Debug)]
+pub struct DelayService<S> {
+    delay: Duration,
+    next: S,
+}
+
+impl<S> DelayService<S> {
+    pub fn new(delay: Duration, next: S) -> Self {
+        DelayService { delay, next }
+    }
+}
+
+impl<S, Req> Service<Req> for DelayService<S>
+where
+    S: Service<Req> + Send + 'static,
+    Req: Request + Send + 'static,
+{
+    type Future = Box<dyn Future<
+        Item = ilp::Fulfill,
+        Error = ilp::Reject,
+    > + 'static + Send>;
+
+    fn call(self, request: Req) -> Self::Future {
+        let future = Delay::new(Instant::now() + self.delay)
+            .then(move |result| {
+                result.expect("delay error");
+                self.next.call(request)
+            });
+        Box::new(future)
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct PanicService;
 
-impl Service for PanicService {
+impl<Req: Request> Service<Req> for PanicService {
     type Future = Box<dyn Future<
         Item = ilp::Fulfill,
         Error = ilp::Reject,
     > + Send + 'static>;
-    fn call(self, _prepare: ilp::Prepare) -> Self::Future {
+    fn call(self, _request: Req) -> Self::Future {
         panic!("PanicService received prepare");
     }
 }
@@ -137,7 +185,6 @@ pub struct MockServer {
         fn() -> hyper::Response<hyper::Body>,
         (),
     >,
-    delay: Option<Duration>,
 }
 
 impl MockServer {
@@ -146,7 +193,6 @@ impl MockServer {
             test_request: |_req| {},
             test_body: |_body| {},
             make_response: Ok(|| { panic!("missing make_response") }),
-            delay: None,
         }
     }
 
@@ -179,19 +225,12 @@ impl MockServer {
         self
     }
 
-    /// Time to wait before responding.
-    pub fn with_delay(mut self, delay: Duration) -> Self {
-        self.delay = Some(delay);
-        self
-    }
-
     pub fn run<Test>(self, run: Test)
     where
         Test: 'static + Future<Item = ()> + Send,
     {
         // Ensure that parallel tests don't fight over the server port.
         let _guard = SERVER_MUTEX.lock().unwrap();
-        let delay = self.delay.unwrap_or(Duration::from_secs(0));
 
         let receiver = hyper::Server::bind(&RECEIVER_ADDR.into())
             .serve(move || {
@@ -201,8 +240,8 @@ impl MockServer {
                 hyper::service::service_fn(move |req| {
                     let mock = mock.clone();
                     (mock.test_request)(&req);
-                    Delay::new(Instant::now() + delay)
-                        .then(|_| { req.into_body().concat2() })
+                    req.into_body()
+                        .concat2()
                         .then(move |body_result| {
                             (mock.test_body)(body_result.unwrap());
                             match mock.make_response {

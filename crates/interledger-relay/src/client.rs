@@ -1,34 +1,26 @@
-use std::cmp;
 use std::sync::Arc;
-use std::time;
 
 use bytes::{Bytes, BytesMut};
 use futures::future::{Either, err};
 use futures::prelude::*;
 use http::request::Builder as RequestBuilder;
 use hyper::{Response, StatusCode};
-use tokio::util::FutureExt;
 
 type HyperClient = hyper::Client<hyper::client::HttpConnector, hyper::Body>;
 
-/// The maximum duration that the outgoing HTTP client will wait for a response,
-/// even if the Prepare's expiry is longer.
-const DEFAULT_MAX_TIMEOUT: time::Duration = time::Duration::from_secs(60);
-
 static OCTET_STREAM: &'static [u8] = b"application/octet-stream";
 
+// TODO remove builder?
 #[derive(Clone, Debug)]
 pub struct Client {
     address: Bytes,
     hyper: Arc<HyperClient>,
-    max_timeout: time::Duration,
 }
 
 #[derive(Clone, Debug)]
 pub struct ClientBuilder {
     address: Bytes,
     client: Option<HyperClient>,
-    max_timeout: time::Duration,
 }
 
 impl Client {
@@ -41,43 +33,21 @@ impl Client {
     pub fn request(self, mut req_builder: RequestBuilder, prepare: ilp::Prepare)
         -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject>
     {
-        let expires_at = prepare.expires_at();
-        let expires_in = expires_at.duration_since(time::SystemTime::now());
-        let expires_in = match expires_in {
-            Ok(expires_in) => expires_in,
-            Err(_) => return Either::B(err(self.make_reject(
-                ilp::ErrorCode::R02_INSUFFICIENT_TIMEOUT,
-                b"insufficient timeout",
-            ))),
-        };
-
         let prepare_bytes = BytesMut::from(prepare).freeze();
         let req = req_builder
             .header(hyper::header::CONTENT_TYPE, OCTET_STREAM)
             .body(hyper::Body::from(prepare_bytes))
             .expect("build_prepare_request builder error");
 
-        Either::A(self.hyper
+        self.hyper
             .request(req)
-            .timeout(cmp::min(self.max_timeout, expires_in))
-            .then(move |res| {
-                match res {
-                    Ok(res) => Either::A(self.decode_http_response(res)),
-                    Err(error) => Either::B(err({
-                        if error.is_elapsed() {
-                            self.make_reject(
-                                ilp::ErrorCode::R00_TRANSFER_TIMED_OUT,
-                                b"request timed out",
-                            )
-                        } else {
-                            self.make_reject(
-                                ilp::ErrorCode::T01_PEER_UNREACHABLE,
-                                b"peer connection error",
-                            )
-                        }
-                    })),
-                }
-            }))
+            .then(move |res| match res {
+                Ok(res) => Either::A(self.decode_http_response(res)),
+                Err(_error) => Either::B(err(self.make_reject(
+                    ilp::ErrorCode::T01_PEER_UNREACHABLE,
+                    b"peer connection error",
+                ))),
+            })
     }
 
     fn decode_http_response(self, res: Response<hyper::Body>)
@@ -141,11 +111,10 @@ impl Client {
 }
 
 impl ClientBuilder {
-    pub fn new(address: Vec<u8>) -> Self {
+    pub fn new(address: Bytes) -> Self {
         ClientBuilder {
-            address: Bytes::from(address),
+            address,
             client: None,
-            max_timeout: DEFAULT_MAX_TIMEOUT,
         }
     }
 
@@ -153,17 +122,11 @@ impl ClientBuilder {
         Client {
             address: self.address,
             hyper: Arc::new(self.client.unwrap_or_else(HyperClient::new)),
-            max_timeout: self.max_timeout,
         }
     }
 
     pub fn with_client(mut self, client: HyperClient) -> Self {
         self.client = Some(client);
-        self
-    }
-
-    pub fn with_max_timeout(mut self, max_timeout: time::Duration) -> Self {
-        self.max_timeout = max_timeout;
         self
     }
 }
@@ -176,31 +139,25 @@ mod tests {
     use super::*;
 
     static ADDRESS: &'static [u8] = b"example.connector";
-    const MAX_TIMEOUT: time::Duration = time::Duration::from_millis(15);
 
     lazy_static! {
-        static ref CLIENT: Client = ClientBuilder::new(ADDRESS.to_vec())
+        static ref CLIENT: Client = ClientBuilder::new(Bytes::from(ADDRESS))
             .build();
 
-        static ref CLIENT_HTTP2: Client = ClientBuilder::new(ADDRESS.to_vec())
+        static ref CLIENT_HTTP2: Client = ClientBuilder::new(Bytes::from(ADDRESS))
             .with_client(
                 hyper::Client::builder()
                     .http2_only(true)
                     .build_http(),
             )
             .build();
-
-        static ref CLIENT_WITH_TIMEOUT: Client =
-            ClientBuilder::new(ADDRESS.to_vec())
-                .with_max_timeout(MAX_TIMEOUT)
-                .build();
     }
 
     fn make_request() -> RequestBuilder {
         let mut builder = hyper::Request::builder();
         builder.method(hyper::Method::POST);
         builder.uri(RECEIVER_ORIGIN);
-        builder.header("Authorization", "bob_auth");
+        builder.header("Authorization", "alice_auth");
         builder
     }
 
@@ -212,7 +169,7 @@ mod tests {
                 assert_eq!(req.uri().path(), "/");
                 assert_eq!(
                     req.headers().get("Authorization").unwrap(),
-                    "bob_auth",
+                    "alice_auth",
                 );
                 assert_eq!(
                     req.headers().get("Content-Type").unwrap(),
@@ -236,55 +193,6 @@ mod tests {
                         Ok(())
                     })
             });
-    }
-
-    #[test]
-    fn test_outgoing_max_timeout() {
-        testing::MockServer::new()
-            .with_delay(MAX_TIMEOUT * 2)
-            .with_response(|| {
-                hyper::Response::builder()
-                    .status(200)
-                    .body(hyper::Body::from(testing::FULFILL.as_bytes()))
-                    .unwrap()
-            })
-            .run({
-                CLIENT_WITH_TIMEOUT.clone()
-                    .request(make_request(), testing::PREPARE.clone())
-                    .then(|result| -> Result<(), ()> {
-                        let reject = result.unwrap_err();
-                        assert_eq!(reject.code(), ilp::ErrorCode::R00_TRANSFER_TIMED_OUT);
-                        assert_eq!(reject.message(), b"request timed out");
-                        Ok(())
-                    })
-            })
-    }
-
-    #[test]
-    fn test_outgoing_prepare_expiry() {
-        // Create a `prepare` with a short expiry.
-        let mut prepare = testing::PREPARE.clone();
-        let soon = time::Duration::from_millis(100);
-        prepare.set_expires_at(time::SystemTime::now() + soon);
-
-        testing::MockServer::new()
-            .with_delay(time::Duration::from_millis(101))
-            .with_response(|| {
-                hyper::Response::builder()
-                    .status(200)
-                    .body(hyper::Body::from(testing::FULFILL.as_bytes()))
-                    .unwrap()
-            })
-            .run({
-                CLIENT.clone()
-                    .request(make_request(), prepare)
-                    .then(|result| -> Result<(), ()> {
-                        let reject = result.unwrap_err();
-                        assert_eq!(reject.code(), ilp::ErrorCode::R00_TRANSFER_TIMED_OUT);
-                        assert_eq!(reject.message(), b"request timed out");
-                        Ok(())
-                    })
-            })
     }
 
     #[test]

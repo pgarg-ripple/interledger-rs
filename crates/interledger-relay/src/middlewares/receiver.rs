@@ -1,9 +1,14 @@
+use std::borrow::Borrow;
+
 use bytes::{Bytes, BytesMut};
 use futures::future::{Either, ok};
 use futures::prelude::*;
 use hyper::StatusCode;
 
-use crate::Service;
+use crate::{Request, Service};
+use crate::services;
+
+static PEER_NAME: &'static [u8] = b"ILP-Peer-Name";
 
 #[derive(Clone, Debug)]
 pub struct Receiver<S> {
@@ -12,7 +17,7 @@ pub struct Receiver<S> {
 
 impl<S> hyper::service::Service for Receiver<S>
 where
-    S: Service + 'static + Clone + Send,
+    S: Service<RequestWithHeaders> + 'static + Clone + Send,
 {
     type ReqBody = hyper::Body;
     type ResBody = hyper::Body;
@@ -29,7 +34,7 @@ where
 
 impl<S> Receiver<S>
 where
-    S: Service + 'static + Clone + Send,
+    S: Service<RequestWithHeaders> + 'static + Clone + Send,
 {
     #[inline]
     pub fn new(next: S) -> Self {
@@ -43,8 +48,9 @@ where
         > + Send + 'static
     {
         let next = self.next.clone();
-        req
-            .into_body()
+        let (parts, body) = req.into_parts();
+        // TODO timeout? max amount?
+        body
             .concat2()
             .and_then(move |chunk| {
                 let buffer = Bytes::from(chunk);
@@ -53,7 +59,11 @@ where
                 let buffer = BytesMut::from(buffer);
                 match ilp::Prepare::try_from(buffer) {
                     Ok(prepare) => Either::A({
-                        next.call(prepare)
+                        next
+                            .call(RequestWithHeaders {
+                                prepare,
+                                headers: parts.headers
+                            })
                             .then(|res_packet| {
                                 Ok(make_http_response(res_packet))
                             })
@@ -66,6 +76,34 @@ where
                     }),
                 }
             })
+    }
+}
+
+#[derive(Debug)]
+pub struct RequestWithHeaders {
+    prepare: ilp::Prepare,
+    headers: hyper::HeaderMap,
+}
+
+impl Request for RequestWithHeaders {}
+
+impl Into<ilp::Prepare> for RequestWithHeaders {
+    fn into(self) -> ilp::Prepare {
+        self.prepare
+    }
+}
+
+impl Borrow<ilp::Prepare> for RequestWithHeaders {
+    fn borrow(&self) -> &ilp::Prepare {
+        &self.prepare
+    }
+}
+
+impl services::RequestWithPeerName for RequestWithHeaders {
+    fn peer_name(&self) -> Option<&[u8]> {
+        // TODO I think this copies the name into a HeaderName every call
+        self.headers.get("ILP-Peer-Name")
+            .map(|header| header.as_ref())
     }
 }
 

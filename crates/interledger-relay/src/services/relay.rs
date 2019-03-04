@@ -3,18 +3,16 @@ use std::sync::{Arc, RwLock};
 use bytes::Bytes;
 use futures::future::{Either, err};
 use futures::prelude::*;
-use hyper::{Request, Uri};
 
-use crate::Service;
+use crate::{Service, Request};
 use crate::client::Client;
-use crate::routes;
+use crate::routes::{Route, RoutingTable};
 
-type RoutingTable = routes::RoutingTable<NextHop>;
-pub type Route = routes::Route<NextHop>;
+//pub type Route = routes::Route<NextHop>;
 
-// TODO rename Relay to: RouterRelay? RelayRouter
+// TODO rename Relay to: RouterRelay? RelayRouter?
 #[derive(Clone, Debug)]
-pub struct Relay {
+pub struct RelayService {
     data: Arc<RelayData>,
     client: Client,
 }
@@ -25,7 +23,10 @@ struct RelayData {
     routes: RwLock<RoutingTable>,
 }
 
-impl Service for Relay {
+impl<Req> Service<Req> for RelayService
+where
+    Req: Request,
+{
     type Future = Box<
         dyn Future<
             Item = ilp::Fulfill,
@@ -33,14 +34,14 @@ impl Service for Relay {
         > + Send + 'static,
     >;
 
-    fn call(self, prepare: ilp::Prepare) -> Self::Future {
-        Box::new(self.forward(prepare))
+    fn call(self, request: Req) -> Self::Future {
+        Box::new(self.forward(request.into()))
     }
 }
 
-impl Relay {
+impl RelayService {
     pub fn new(client: Client, routes: Vec<Route>) -> Self {
-        Relay {
+        RelayService {
             data: Arc::new(RelayData {
                 address: client.address().clone(),
                 routes: RwLock::new(RoutingTable::new(routes)),
@@ -67,11 +68,44 @@ impl Relay {
             ))),
         };
 
-        let next_hop = route.next_hop();
-        let mut builder = Request::builder();
+/*
+        debug_assert!(
+            prepare.destination().starts_with(&{
+                let mut prefix = self.data.address.clone();
+                prefix.extend_from_slice(&[b'.']);
+                prefix
+            }),
+        );
+        let segment_offset = self.data.address.len() + 1;
+        // TODO only get the segment for multilateral routes
+        let destination_segment =
+            prepare.destination()[segment_offset..]
+                .split(|&byte| byte == b'.')
+                .next()
+                .filter(|&segment| validate_address_segment(segment));
+        let destination_segment = match destination_segment {
+            Some(segment) => segment,
+            None => return Either::B(err(self.make_reject(
+                ilp::ErrorCode::F02_UNREACHABLE,
+                b"invalid address segment",
+            ))),
+        };
+*/
+
+        let next_hop = route.endpoint(&self.data.address, prepare.destination());
+        let next_hop = match next_hop {
+            Ok(uri) => uri,
+            Err(_error) => return Either::B(err(self.make_reject(
+                ilp::ErrorCode::F02_UNREACHABLE,
+                b"invalid address segment",
+            ))),
+        };
+
+        let mut builder = hyper::Request::builder();
         builder.method(hyper::Method::POST);
-        builder.uri(&next_hop.endpoint);
-        if let Some(auth) = &next_hop.auth {
+        builder.uri(&next_hop);
+        //builder.header( // TODO ILP-Peer-Name
+        if let Some(auth) = route.auth() {
             builder.header(hyper::header::AUTHORIZATION, auth.clone());
         }
 
@@ -89,6 +123,7 @@ impl Relay {
     }
 }
 
+/*
 #[derive(Clone, Debug)]
 pub struct NextHop {
     endpoint: Uri,
@@ -103,31 +138,33 @@ impl NextHop {
         }
     }
 }
+*/
 
 #[cfg(test)]
-mod test_relay {
+mod test_relay_service {
+    use hyper::Uri;
     use lazy_static::lazy_static;
 
+    use crate::NextHop;
     use crate::client::ClientBuilder;
-    use crate::testing::{self, RECEIVER_ORIGIN, ROUTES};
+    use crate::testing::{self, ADDRESS, RECEIVER_ORIGIN, ROUTES};
     use super::*;
 
-    static ADDRESS: &'static [u8] = b"example.relay";
-
     lazy_static! {
-        static ref CLIENT: Client = ClientBuilder::new(ADDRESS.to_vec()).build();
-        static ref RELAY: Relay = Relay::new(CLIENT.clone(), ROUTES.clone());
+        static ref CLIENT: Client = ClientBuilder::new(Bytes::from(ADDRESS)).build();
+        static ref RELAY: RelayService = RelayService::new(CLIENT.clone(), ROUTES.clone());
     }
 
+    // TODO test relay to both Unilateral and Multilateral
     #[test]
-    fn test_outgoing_request() {
+    fn test_outgoing_request_unilateral() {
         testing::MockServer::new()
             .test_request(|req| {
                 assert_eq!(req.method(), hyper::Method::POST);
-                assert_eq!(req.uri().path(), "/bob");
+                assert_eq!(req.uri().path(), "/alice");
                 assert_eq!(
                     req.headers().get("Authorization").unwrap(),
-                    "bob_auth",
+                    "alice_auth",
                 );
                 assert_eq!(
                     req.headers().get("Content-Type").unwrap(),
@@ -158,10 +195,10 @@ mod test_relay {
         let expect_reject = ilp::RejectBuilder {
             code: ilp::ErrorCode::F02_UNREACHABLE,
             message: b"no route found",
-            triggered_by: b"example.relay",
+            triggered_by: ADDRESS,
             data: b"",
         }.build();
-        let relay = Relay::new(CLIENT.clone(), vec![ROUTES[0].clone()]);
+        let relay = RelayService::new(CLIENT.clone(), vec![ROUTES[1].clone()]);
         testing::MockServer::new().run({
             relay
                 .call(testing::PREPARE.clone())
@@ -177,16 +214,16 @@ mod test_relay {
         let relay = RELAY.clone();
         relay.set_routes(vec![
             Route::new(
-                b"test.bob.".to_vec(),
-                NextHop::new(
-                    format!("{}/new_bob", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
-                    None,
-                ),
+                b"test.alice.".to_vec(),
+                NextHop::Unilateral {
+                    endpoint: format!("{}/new_alice", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
+                    auth: None,
+                },
             ),
         ]);
         testing::MockServer::new()
             .test_request(|req| {
-                assert_eq!(req.uri().path(), "/new_bob");
+                assert_eq!(req.uri().path(), "/new_alice");
             })
             .with_response(|| {
                 hyper::Response::builder()

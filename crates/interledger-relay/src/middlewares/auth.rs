@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use futures::future::{Either, FutureResult, ok};
 use hyper::service::Service as HyperService;
@@ -7,7 +8,8 @@ use hyper::service::Service as HyperService;
 /// Verify that incoming requests have a valid token in the `Authorization` header.
 #[derive(Clone, Debug)]
 pub struct AuthTokenFilter<S> {
-    tokens: HashSet<AuthToken>,
+    // TODO Arc?
+    tokens: Arc<HashSet<AuthToken>>,
     next: S,
 }
 
@@ -21,7 +23,7 @@ where
 {
     pub fn new(tokens: Vec<AuthToken>, next: S) -> Self {
         AuthTokenFilter {
-            tokens: tokens.into_iter().collect::<HashSet<_>>(),
+            tokens: Arc::new(tokens.into_iter().collect::<HashSet<_>>()),
             next,
         }
     }
@@ -60,7 +62,7 @@ where
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Debug, Eq, Hash, PartialEq)]
 pub struct AuthToken(Vec<u8>);
 
 impl AuthToken {

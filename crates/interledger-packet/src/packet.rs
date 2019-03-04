@@ -554,15 +554,15 @@ mod test_packet {
     #[test]
     fn test_try_from() {
         assert_eq!(
-            Packet::try_from(BytesMut::from(*PREPARE_BYTES)).unwrap(),
+            Packet::try_from(BytesMut::from(PREPARE_BYTES)).unwrap(),
             Packet::Prepare(PREPARE.clone()),
         );
         assert_eq!(
-            Packet::try_from(BytesMut::from(*FULFILL_BYTES)).unwrap(),
+            Packet::try_from(BytesMut::from(FULFILL_BYTES)).unwrap(),
             Packet::Fulfill(FULFILL.clone()),
         );
         assert_eq!(
-            Packet::try_from(BytesMut::from(*REJECT_BYTES)).unwrap(),
+            Packet::try_from(BytesMut::from(REJECT_BYTES)).unwrap(),
             Packet::Reject(REJECT.clone()),
         );
 
@@ -576,15 +576,15 @@ mod test_packet {
     fn test_into_bytes_mut() {
         assert_eq!(
             BytesMut::from(Packet::Prepare(PREPARE.clone())),
-            BytesMut::from(*PREPARE_BYTES),
+            BytesMut::from(PREPARE_BYTES),
         );
         assert_eq!(
             BytesMut::from(Packet::Fulfill(FULFILL.clone())),
-            BytesMut::from(*FULFILL_BYTES),
+            BytesMut::from(FULFILL_BYTES),
         );
         assert_eq!(
             BytesMut::from(Packet::Reject(REJECT.clone())),
-            BytesMut::from(*REJECT_BYTES),
+            BytesMut::from(REJECT_BYTES),
         );
     }
 }
@@ -597,13 +597,13 @@ mod test_prepare {
     #[test]
     fn test_try_from() {
         assert_eq!(
-            Prepare::try_from(BytesMut::from(*PREPARE_BYTES)).unwrap(),
+            Prepare::try_from(BytesMut::from(PREPARE_BYTES)).unwrap(),
             *PREPARE
         );
 
         // Incorrect packet type on an otherwise well-formed Prepare.
         assert!(Prepare::try_from({
-            let mut with_wrong_type = BytesMut::from(*PREPARE_BYTES);
+            let mut with_wrong_type = BytesMut::from(PREPARE_BYTES);
             with_wrong_type[0] = PacketType::Fulfill as u8;
             with_wrong_type
         })
@@ -611,7 +611,7 @@ mod test_prepare {
 
         // A packet with junk data appened to the end.
         let with_junk_data = Prepare::try_from({
-            let mut buffer = BytesMut::from(*PREPARE_BYTES);
+            let mut buffer = BytesMut::from(PREPARE_BYTES);
             buffer.extend_from_slice(&[0x11, 0x12, 0x13]);
             buffer
         })
@@ -628,7 +628,7 @@ mod test_prepare {
 
     #[test]
     fn test_into_bytes_mut() {
-        assert_eq!(BytesMut::from(PREPARE.clone()), *PREPARE_BYTES,);
+        assert_eq!(BytesMut::from(PREPARE.clone()), PREPARE_BYTES);
     }
 
     #[test]
@@ -646,7 +646,7 @@ mod test_prepare {
         .build();
         prepare.set_amount(target_amount);
         assert_eq!(prepare.amount(), target_amount);
-        assert_eq!(BytesMut::from(prepare), *PREPARE_BYTES);
+        assert_eq!(BytesMut::from(prepare), PREPARE_BYTES);
     }
 
     #[test]
@@ -664,7 +664,7 @@ mod test_prepare {
         .build();
         prepare.set_expires_at(target_expiry);
         assert_eq!(prepare.expires_at(), target_expiry);
-        assert_eq!(BytesMut::from(prepare), *PREPARE_BYTES);
+        assert_eq!(BytesMut::from(prepare), PREPARE_BYTES);
     }
 
     #[test]
@@ -686,13 +686,13 @@ mod test_fulfill {
     #[test]
     fn test_try_from() {
         assert_eq!(
-            Fulfill::try_from(BytesMut::from(*FULFILL_BYTES)).unwrap(),
+            Fulfill::try_from(BytesMut::from(FULFILL_BYTES)).unwrap(),
             *FULFILL
         );
 
         // A packet with junk data appened to the end.
         let with_junk_data = Fulfill::try_from({
-            let mut buffer = BytesMut::from(*FULFILL_BYTES);
+            let mut buffer = BytesMut::from(FULFILL_BYTES);
             buffer.extend_from_slice(&[0x11, 0x12, 0x13]);
             buffer
         })
@@ -715,7 +715,7 @@ mod test_fulfill {
 
     #[test]
     fn test_into_bytes_mut() {
-        assert_eq!(BytesMut::from(FULFILL.clone()), *FULFILL_BYTES,);
+        assert_eq!(BytesMut::from(FULFILL.clone()), FULFILL_BYTES);
     }
 
     #[test]
@@ -737,13 +737,13 @@ mod test_reject {
     #[test]
     fn test_try_from() {
         assert_eq!(
-            Reject::try_from(BytesMut::from(*REJECT_BYTES)).unwrap(),
+            Reject::try_from(BytesMut::from(REJECT_BYTES)).unwrap(),
             *REJECT,
         );
 
         // A packet with junk data appened to the end.
         let with_junk_data = Reject::try_from({
-            let mut buffer = BytesMut::from(*REJECT_BYTES);
+            let mut buffer = BytesMut::from(REJECT_BYTES);
             buffer.extend_from_slice(&[0x11, 0x12, 0x13]);
             buffer
         })
@@ -756,7 +756,7 @@ mod test_reject {
 
     #[test]
     fn test_into_bytes_mut() {
-        assert_eq!(BytesMut::from(REJECT.clone()), *REJECT_BYTES,);
+        assert_eq!(BytesMut::from(REJECT.clone()), REJECT_BYTES);
     }
 
     #[test]
