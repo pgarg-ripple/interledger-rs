@@ -1,13 +1,14 @@
-use std::ops::Add; // XXX?
 use std::time::{Duration, SystemTime};
 
 use byteorder::ReadBytesExt;
 use bytes::{BufMut, Bytes, BytesMut};
 
-use crate::{Fulfill, FulfillBuilder, ParseError, Prepare, PrepareBuilder};
+use crate::{Addr, Fulfill, FulfillBuilder, ParseError, Prepare, PrepareBuilder};
 use crate::oer::{self, BufOerExt, MutBufOerExt};
 
-pub static DESTINATION: &'static [u8] = b"peer.config";
+pub static DESTINATION: Addr<'static> = unsafe {
+    Addr::new_unchecked(b"peer.config")
+};
 
 static PEER_PROTOCOL_FULFILLMENT: &'static [u8; 32] = &[0; 32];
 static PEER_PROTOCOL_CONDITION: &'static [u8; 32] = b"\
@@ -41,7 +42,7 @@ impl Request {
             destination: DESTINATION,
             amount: 0,
             execution_condition: PEER_PROTOCOL_CONDITION,
-            expires_at: SystemTime::now().add(DEFAULT_EXPIRY_DURATION),
+            expires_at: SystemTime::now() + DEFAULT_EXPIRY_DURATION,
             data: &[],
         }.build()
     }
@@ -78,28 +79,31 @@ impl From<Response> for Fulfill {
 impl Response {
     pub fn try_from(fulfill: Fulfill) -> Result<Self, ParseError> {
         if fulfill.fulfillment() != PEER_PROTOCOL_FULFILLMENT {
-            return Err(ParseError::InvalidPacket("wrong ildcp fulfillment".to_owned()));
+            return Err(ParseError::InvalidPacket({
+                "wrong ildcp fulfillment".to_owned()
+            }));
         }
 
         let mut reader = &fulfill.data()[..];
         let buffer_len = reader.len();
 
-        reader.skip_var_octet_string()?;
+        // Validate the client address.
+        Addr::try_from(reader.read_var_octet_string()?)?;
         let asset_scale = reader.read_u8()?;
 
         let asset_code_offset = buffer_len - reader.len();
         reader.skip_var_octet_string()?;
 
         Ok(Response {
-            // TODO use fulfill.into_data()
-            buffer: Bytes::from(fulfill.data()),
+            buffer: fulfill.into_data().freeze(),
             asset_scale,
             asset_code_offset,
         })
     }
 
-    pub fn client_address(&self) -> &[u8] {
-        (&self.buffer[..]).peek_var_octet_string().unwrap()
+    pub fn client_address(&self) -> Addr {
+        let addr_bytes = (&self.buffer[..]).peek_var_octet_string().unwrap();
+        Addr::try_from(addr_bytes).unwrap()
     }
 
     pub fn asset_scale(&self) -> u8 {
@@ -115,7 +119,7 @@ impl Response {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResponseBuilder<'a> {
-    pub client_address: &'a [u8],
+    pub client_address: Addr<'a>,
     pub asset_scale: u8,
     pub asset_code: &'a [u8],
 }
@@ -127,7 +131,7 @@ impl<'a> ResponseBuilder<'a> {
         let buf_size = ASSET_SCALE_LEN + address_size + asset_code_size;
         let mut buffer = BytesMut::with_capacity(buf_size);
 
-        buffer.put_var_octet_string(self.client_address);
+        buffer.put_var_octet_string(self.client_address.as_ref());
         buffer.put_u8(self.asset_scale);
         buffer.put_var_octet_string(self.asset_code);
 
@@ -158,7 +162,7 @@ mod test_request {
             amount: 0,
             expires_at: SystemTime::now(),
             execution_condition: PEER_PROTOCOL_CONDITION,
-            destination: b"peer.config.not_ildcp",
+            destination: Addr::new(b"peer.config.not_ildcp"),
             data: b"",
         };
 
@@ -175,10 +179,7 @@ mod test_request {
     fn test_try_from_prepare() {
         let prepare = Prepare::try_from(BytesMut::from(REQUEST_BYTES)).unwrap();
         let request = Request::try_from(prepare).unwrap();
-        assert_eq!(
-            request,
-            Request {},
-        );
+        assert_eq!(request, Request {});
 
         assert!(Request::try_from(WRONG_DESTINATION.build()).is_err());
         assert!(Request::try_from(WRONG_CONDITION.build()).is_err());
@@ -219,7 +220,7 @@ mod test_response {
     fn test_try_from_fulfill() {
         let fulfill = Fulfill::try_from(BytesMut::from(RESPONSE_BYTES)).unwrap();
         let response = Response::try_from(fulfill).unwrap();
-        assert_eq!(response.client_address(), b"example.client");
+        assert_eq!(response.client_address(), Addr::new(b"example.client"));
         assert_eq!(response.asset_scale(), 13);
         assert_eq!(response.asset_code(), b"XAM");
 
@@ -230,7 +231,7 @@ mod test_response {
     #[test]
     fn test_into_fulfill() {
         let response = ResponseBuilder {
-            client_address: b"example.client",
+            client_address: Addr::new(b"example.client"),
             asset_scale: 13,
             asset_code: b"XAM",
         }.build();

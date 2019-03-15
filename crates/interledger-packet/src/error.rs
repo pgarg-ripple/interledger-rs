@@ -67,7 +67,8 @@ impl From<ErrorCode> for [u8; 3] {
 
 impl fmt::Display for ErrorCode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", str::from_utf8(&self.0[..]).unwrap())
+        let as_str = str::from_utf8(&self.0[..]).map_err(|_| fmt::Error)?;
+        write!(f, "{}", as_str)
     }
 }
 

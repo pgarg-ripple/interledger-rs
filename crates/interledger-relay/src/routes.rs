@@ -2,12 +2,14 @@ use bytes::{BufMut, Bytes, BytesMut};
 use http::HttpTryFrom;
 use http::uri::InvalidUriBytes;
 use hyper::Uri;
+use serde::Deserialize;
+
+use crate::AuthToken;
+use crate::serde::deserialize_uri;
 
 /// A simple static routing table.
 #[derive(Debug, PartialEq)]
 pub struct RoutingTable(Vec<Route>);
-
-// TODO validate target prefix? "^[a-zA-Z0-9._~-]+$"
 
 impl RoutingTable {
     #[inline]
@@ -15,11 +17,11 @@ impl RoutingTable {
         RoutingTable(routes)
     }
 
-    pub fn resolve(&self, destination: &[u8]) -> Option<&Route> {
+    pub fn resolve(&self, destination: ilp::Addr) -> Option<&Route> {
         self.0
             .iter()
             .find(|route| {
-                destination.starts_with(&route.target_prefix)
+                destination.as_ref().starts_with(&route.target_prefix)
             })
     }
 }
@@ -30,51 +32,55 @@ impl Default for RoutingTable {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Route {
-    target_prefix: Vec<u8>,
+    target_prefix: Bytes,
     next_hop: NextHop,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "type")]
 pub enum NextHop {
-    Unilateral {
+    Bilateral {
+        #[serde(deserialize_with = "deserialize_uri")]
         endpoint: Uri,
-        auth: Option<Bytes>,
+        auth: Option<AuthToken>,
     },
     Multilateral {
-        uri_prefix: Bytes,
-        uri_suffix: Bytes,
-        auth: Option<Bytes>,
+        endpoint_prefix: Bytes,
+        endpoint_suffix: Bytes,
+        auth: Option<AuthToken>,
     },
 }
 
 impl Route {
     #[inline]
     pub fn new(
-        target_prefix: Vec<u8>,
+        target_prefix: Bytes,
         next_hop: NextHop,
     ) -> Self {
         Route { target_prefix, next_hop }
     }
 
-    #[inline]
-    pub fn target_prefix(&self) -> &[u8] {
+    /*#[inline]
+    pub(crate) fn target_prefix(&self) -> &[u8] {
         &self.target_prefix[..]
-    }
+    }*/
 
-    pub fn endpoint(&self, connector_addr: &[u8], destination_addr: &[u8])
-        -> Result<Uri, RouterError>
-    {
+    pub(crate) fn endpoint(
+        &self,
+        connector_addr: ilp::Addr,
+        destination_addr: ilp::Addr,
+    ) -> Result<Uri, RouterError> {
         match &self.next_hop {
             // `hyper::Uri` is built from `bytes::Bytes`, so this clone doesn't
             // actually allocate.
-            NextHop::Unilateral { endpoint, .. } => Ok(endpoint.clone()),
-            NextHop::Multilateral { uri_prefix, uri_suffix, .. } => {
+            NextHop::Bilateral { endpoint, .. } => Ok(endpoint.clone()),
+            NextHop::Multilateral { endpoint_prefix, endpoint_suffix, .. } => {
                 // TODO or use the route's target prefix instead of the connector address?
                 let destination_segment = match parse_address_segment(
                     connector_addr,
-                    destination_addr,
+                    destination_addr.as_ref(),
                 ) {
                     Some(segment) => segment,
                     None => return Err(RouterError(ErrorKind::InvalidDestination)),
@@ -82,21 +88,22 @@ impl Route {
 
                 // TODO dont allocate every time (maybe have a cache of segment => uri)
                 let mut uri = BytesMut::with_capacity({
-                    uri_prefix.len()
+                    endpoint_prefix.len()
                     + destination_segment.len()
-                    + uri_suffix.len()
+                    + endpoint_suffix.len()
                 });
-                uri.put_slice(uri_prefix);
+                uri.put_slice(endpoint_prefix);
                 uri.put_slice(destination_segment);
-                uri.put_slice(uri_suffix);
+                uri.put_slice(endpoint_suffix);
                 Ok(Uri::try_from(uri.freeze())?)
             },
         }
     }
 
-    pub fn auth(&self) -> Option<&Bytes> {
+    #[inline]
+    pub(crate) fn auth(&self) -> Option<&AuthToken> {
         match &self.next_hop {
-            NextHop::Unilateral { auth, .. } => auth.as_ref(),
+            NextHop::Bilateral { auth, .. } => auth.as_ref(),
             NextHop::Multilateral { auth, .. } => auth.as_ref(),
         }
     }
@@ -117,9 +124,10 @@ impl From<InvalidUriBytes> for RouterError {
     }
 }
 
-fn parse_address_segment<'a>(connector: &[u8], destination: &'a [u8])
+fn parse_address_segment<'a>(connector: ilp::Addr, destination: &'a [u8])
     -> Option<&'a [u8]>
 {
+    let connector = connector.as_ref();
     debug_assert!(
         destination.starts_with(connector)
             && destination[connector.len()] == b'.',
@@ -156,32 +164,32 @@ mod test_routing_table {
     #[test]
     fn test_resolve() {
         let table = RoutingTable::new(vec![
-            Route::new(b"test.one".to_vec(), HOP_0.clone()),
-            Route::new(b"test.two".to_vec(), HOP_1.clone()),
-            Route::new(b"test.".to_vec(), HOP_2.clone()),
+            Route::new(Bytes::from("test.one"), HOP_0.clone()),
+            Route::new(Bytes::from("test.two"), HOP_1.clone()),
+            Route::new(Bytes::from("test."), HOP_2.clone()),
         ]);
         let routes = &table.0;
         // Exact match.
-        assert_eq!(table.resolve(b"test.one"), Some(&routes[0]));
+        assert_eq!(table.resolve(ilp::Addr::new(b"test.one")), Some(&routes[0]));
         // Prefix match.
-        assert_eq!(table.resolve(b"test.one.alice"), Some(&routes[0]));
-        assert_eq!(table.resolve(b"test.two.bob"), Some(&routes[1]));
-        assert_eq!(table.resolve(b"test.three"), Some(&routes[2]));
+        assert_eq!(table.resolve(ilp::Addr::new(b"test.one.alice")), Some(&routes[0]));
+        assert_eq!(table.resolve(ilp::Addr::new(b"test.two.bob")), Some(&routes[1]));
+        assert_eq!(table.resolve(ilp::Addr::new(b"test.three")), Some(&routes[2]));
         // Dot separator isn't necessary.
-        assert_eq!(table.resolve(b"test.two__"), Some(&routes[1]));
+        assert_eq!(table.resolve(ilp::Addr::new(b"test.two__")), Some(&routes[1]));
         // No matching prefix.
-        assert_eq!(table.resolve(b"example.test.one"), None);
-        assert_eq!(table.resolve(b""), None);
+        assert_eq!(table.resolve(ilp::Addr::new(b"example.test.one")), None);
+        assert_eq!(table.resolve(ilp::Addr::new(b"g.alice")), None);
     }
 
     #[test]
     fn test_resolve_catch_all() {
         let table = RoutingTable::new(vec![
-            Route::new(b"test.one".to_vec(), HOP_0.clone()),
-            Route::new(b"test.two".to_vec(), HOP_1.clone()),
-            Route::new(b"".to_vec(), HOP_2.clone()),
+            Route::new(Bytes::from("test.one"), HOP_0.clone()),
+            Route::new(Bytes::from("test.two"), HOP_1.clone()),
+            Route::new(Bytes::from(""), HOP_2.clone()),
         ]);
-        assert_eq!(table.resolve(b"example.test.one"), Some(&table.0[2]));
+        assert_eq!(table.resolve(ilp::Addr::new(b"example.test.one")), Some(&table.0[2]));
     }
 }
 
@@ -192,49 +200,58 @@ mod test_route {
     use super::*;
 
     lazy_static! {
-        static ref UNI_URI: Uri =
+        static ref BI_URI: Uri =
             "http://example.com/alice".parse::<Uri>().unwrap();
 
-        static ref UNI: Route = Route::new(
-            b"test.alice.".to_vec(),
-            NextHop::Unilateral {
-                endpoint: UNI_URI.clone(),
-                auth: Some(Bytes::from("alice_auth")),
+        static ref BI: Route = Route::new(
+            Bytes::from("test.alice."),
+            NextHop::Bilateral {
+                endpoint: BI_URI.clone(),
+                auth: Some(AuthToken::new("alice_auth")),
             },
         );
 
         static ref MULTI: Route = Route::new(
-            b"test.relay.".to_vec(),
+            Bytes::from("test.relay."),
             NextHop::Multilateral {
-                uri_prefix: Bytes::from("http://example.com/bob/"),
-                uri_suffix: Bytes::from("/ilp"),
-                auth: Some(Bytes::from("bob_auth")),
+                endpoint_prefix: Bytes::from("http://example.com/bob/"),
+                endpoint_suffix: Bytes::from("/ilp"),
+                auth: Some(AuthToken::new("bob_auth")),
             },
         );
     }
 
-    #[test]
+    /*#[test]
     fn test_target_prefix() {
-        assert_eq!(UNI.target_prefix(), b"test.alice.");
-    }
+        assert_eq!(BI.target_prefix(), b"test.alice.");
+    }*/
 
     #[test]
     fn test_endpoint() {
         assert_eq!(
-            UNI.endpoint(b"test.relay", b"test.whatever.123").unwrap(),
-            *UNI_URI,
+            BI.endpoint(
+                ilp::Addr::new(b"test.relay"),
+                ilp::Addr::new(b"test.whatever.123"),
+            ).unwrap(),
+            *BI_URI,
         );
         assert_eq!(
-            MULTI.endpoint(b"test.relay", b"test.relay.123.456").unwrap(),
+            MULTI.endpoint(
+                ilp::Addr::new(b"test.relay"),
+                ilp::Addr::new(b"test.relay.123.456"),
+            ).unwrap(),
             "http://example.com/bob/123/ilp".parse::<Uri>().unwrap(),
         );
-        assert!(MULTI.endpoint(b"test.relay", b"test.relay.123!.456").is_err());
+        assert!(MULTI.endpoint(
+            ilp::Addr::new(b"test.relay"),
+            ilp::Addr::new(b"test.relay.123~.456"),
+        ).is_err());
     }
 
     #[test]
     fn test_auth() {
-        assert_eq!(UNI.auth(), Some(&Bytes::from("alice_auth")));
-        assert_eq!(MULTI.auth(), Some(&Bytes::from("bob_auth")));
+        assert_eq!(BI.auth(), Some(&AuthToken::new("alice_auth")));
+        assert_eq!(MULTI.auth(), Some(&AuthToken::new("bob_auth")));
     }
 }
 
@@ -245,15 +262,15 @@ mod test_helpers {
     #[test]
     fn test_parse_address_segment() {
         assert_eq!(
-            parse_address_segment(b"test.cx", b"test.cx.alice"),
+            parse_address_segment(ilp::Addr::new(b"test.cx"), b"test.cx.alice"),
             Some(&b"alice"[..]),
         );
         assert_eq!(
-            parse_address_segment(b"test.cx", b"test.cx.alice.bob"),
+            parse_address_segment(ilp::Addr::new(b"test.cx"), b"test.cx.alice.bob"),
             Some(&b"alice"[..]),
         );
         assert_eq!(
-            parse_address_segment(b"test.cx", b"test.cx.alice!"),
+            parse_address_segment(ilp::Addr::new(b"test.cx"), b"test.cx.alice!"),
             None,
         );
     }

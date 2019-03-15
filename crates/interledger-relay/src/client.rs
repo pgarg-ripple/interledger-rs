@@ -5,31 +5,37 @@ use futures::future::{Either, err};
 use futures::prelude::*;
 use http::request::Builder as RequestBuilder;
 use hyper::{Response, StatusCode};
+use log::warn;
 
 type HyperClient = hyper::Client<hyper::client::HttpConnector, hyper::Body>;
 
 static OCTET_STREAM: &'static [u8] = b"application/octet-stream";
 
-// TODO remove builder?
 #[derive(Clone, Debug)]
 pub struct Client {
-    address: Bytes,
+    address: ilp::Address,
     hyper: Arc<HyperClient>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ClientBuilder {
-    address: Bytes,
-    client: Option<HyperClient>,
-}
-
 impl Client {
-    pub fn address(&self) -> &Bytes {
+    pub fn new(address: ilp::Address) -> Self {
+        Client::new_with_client(address, HyperClient::new())
+    }
+
+    pub fn new_with_client(address: ilp::Address, hyper: HyperClient) -> Self {
+        Client {
+            address,
+            hyper: Arc::new(hyper),
+        }
+    }
+
+    pub fn address(&self) -> &ilp::Address {
         &self.address
     }
 
-    /// `req_builder` is the request template. At a minimum, it should have the
-    /// URI and method set.
+    /// `req_builder` is the base request.
+    /// The URI and method should be set, along with extra headers.
+    /// `Content-Type` and `Content-Length` should not be set.
     pub fn request(self, mut req_builder: RequestBuilder, prepare: ilp::Prepare)
         -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject>
     {
@@ -38,19 +44,26 @@ impl Client {
             .header(hyper::header::CONTENT_TYPE, OCTET_STREAM)
             .body(hyper::Body::from(prepare_bytes))
             .expect("build_prepare_request builder error");
+        let uri = req.uri().clone();
 
         self.hyper
             .request(req)
             .then(move |res| match res {
-                Ok(res) => Either::A(self.decode_http_response(res)),
-                Err(_error) => Either::B(err(self.make_reject(
-                    ilp::ErrorCode::T01_PEER_UNREACHABLE,
-                    b"peer connection error",
-                ))),
+                Ok(res) => Either::A(self.decode_http_response(uri, res)),
+                Err(error) => {
+                    warn!(
+                        "outgoing connection error: uri=\"{:?}\" error=\"{}\"",
+                        uri, error,
+                    );
+                    Either::B(err(self.make_reject(
+                        ilp::ErrorCode::T01_PEER_UNREACHABLE,
+                        b"peer connection error",
+                    )))
+                },
             })
     }
 
-    fn decode_http_response(self, res: Response<hyper::Body>)
+    fn decode_http_response(self, uri: hyper::Uri, res: Response<hyper::Body>)
         -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject>
     {
         let status = res.status();
@@ -61,7 +74,7 @@ impl Client {
                     match body {
                         Ok(body) => {
                             let body = BytesMut::from(Bytes::from(body));
-                            self.decode_response(body).into_future()
+                            self.decode_response(uri, body).into_future()
                         },
                         Err(_error) => err(self.make_reject(
                             ilp::ErrorCode::T00_INTERNAL_ERROR,
@@ -70,16 +83,19 @@ impl Client {
                     }
                 }))
         } else if status.is_client_error() {
+            warn!("remote client error: uri=\"{}\" status={:?}", uri, status);
             Either::B(err(self.make_reject(
                 ilp::ErrorCode::F00_BAD_REQUEST,
                 b"bad request to peer",
             )))
         } else if status.is_server_error() {
+            warn!("remote server error: uri=\"{}\" status={:?}", uri, status);
             Either::B(err(self.make_reject(
                 ilp::ErrorCode::T01_PEER_UNREACHABLE,
                 b"peer internal error",
             )))
         } else {
+            warn!("unexpected status code: uri=\"{}\" status={:?}", uri, status);
             Either::B(err(self.make_reject(
                 ilp::ErrorCode::T00_INTERNAL_ERROR,
                 b"unexpected response code from peer",
@@ -87,16 +103,19 @@ impl Client {
         }
     }
 
-    fn decode_response(&self, bytes: BytesMut)
+    fn decode_response(&self, uri: hyper::Uri, bytes: BytesMut)
         -> Result<ilp::Fulfill, ilp::Reject>
     {
         match ilp::Packet::try_from(bytes) {
             Ok(ilp::Packet::Fulfill(fulfill)) => Ok(fulfill),
             Ok(ilp::Packet::Reject(reject)) => Err(reject),
-            _ => Err(self.make_reject(
-                ilp::ErrorCode::T00_INTERNAL_ERROR,
-                b"invalid response body from peer",
-            )),
+            _ => {
+                warn!("invalid response body: uri=\"{}\"", uri);
+                Err(self.make_reject(
+                    ilp::ErrorCode::T00_INTERNAL_ERROR,
+                    b"invalid response body from peer",
+                ))
+            },
         }
     }
 
@@ -104,30 +123,9 @@ impl Client {
         ilp::RejectBuilder {
             code,
             message,
-            triggered_by: &self.address,
+            triggered_by: self.address.as_addr(),
             data: b"",
         }.build()
-    }
-}
-
-impl ClientBuilder {
-    pub fn new(address: Bytes) -> Self {
-        ClientBuilder {
-            address,
-            client: None,
-        }
-    }
-
-    pub fn build(self) -> Client {
-        Client {
-            address: self.address,
-            hyper: Arc::new(self.client.unwrap_or_else(HyperClient::new)),
-        }
-    }
-
-    pub fn with_client(mut self, client: HyperClient) -> Self {
-        self.client = Some(client);
-        self
     }
 }
 
@@ -138,19 +136,19 @@ mod tests {
     use crate::testing::{self, RECEIVER_ORIGIN};
     use super::*;
 
-    static ADDRESS: &'static [u8] = b"example.connector";
+    static ADDRESS: ilp::Addr<'static> = unsafe {
+        ilp::Addr::new_unchecked(b"example.connector")
+    };
 
     lazy_static! {
-        static ref CLIENT: Client = ClientBuilder::new(Bytes::from(ADDRESS))
-            .build();
+        static ref CLIENT: Client = Client::new(ADDRESS.to_address());
 
-        static ref CLIENT_HTTP2: Client = ClientBuilder::new(Bytes::from(ADDRESS))
-            .with_client(
-                hyper::Client::builder()
-                    .http2_only(true)
-                    .build_http(),
-            )
-            .build();
+        static ref CLIENT_HTTP2: Client = Client::new_with_client(
+            ADDRESS.to_address(),
+            hyper::Client::builder()
+                .http2_only(true)
+                .build_http(),
+        );
     }
 
     fn make_request() -> RequestBuilder {
@@ -174,6 +172,10 @@ mod tests {
                 assert_eq!(
                     req.headers().get("Content-Type").unwrap(),
                     "application/octet-stream",
+                );
+                assert_eq!(
+                    req.headers().get("Content-Length").unwrap(),
+                    &testing::PREPARE.as_bytes().len().to_string(),
                 );
             })
             .test_body(|body| {

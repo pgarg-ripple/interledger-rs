@@ -1,7 +1,6 @@
 use std::cmp;
 use std::time;
 
-use bytes::Bytes;
 use futures::future::err;
 use futures::prelude::*;
 use tokio::util::FutureExt;
@@ -11,14 +10,14 @@ use crate::{Request, Service};
 /// Reject expired Prepares, and time out requests that take too long.
 #[derive(Clone, Debug)]
 pub struct ExpiryService<S> {
-    address: Bytes,
+    address: ilp::Address,
     max_timeout: time::Duration,
     next: S,
 }
 
 impl<S> ExpiryService<S> {
     pub fn new(
-        address: Bytes,
+        address: ilp::Address,
         max_timeout: time::Duration,
         next: S,
     ) -> Self {
@@ -31,7 +30,7 @@ impl<S> ExpiryService<S> {
         ilp::RejectBuilder {
             code,
             message,
-            triggered_by: &self.address,
+            triggered_by: self.address.as_addr(),
             data: &[],
         }.build()
     }
@@ -87,17 +86,24 @@ where
 
 #[cfg(test)]
 mod test_expiry_service {
-    use futures::future::ok;
+    use std::fmt;
+    use std::sync::Mutex;
+
+    use futures::future::{FutureResult, ok};
     use lazy_static::lazy_static;
 
     use crate::testing::{DelayService, FULFILL, MockService, PanicService, PREPARE};
     use super::*;
 
     lazy_static! {
-        static ref ADDRESS: Bytes = Bytes::from(&b"test.alice"[..]);
+        static ref ADDRESS: ilp::Address = ilp::Address::new(b"test.alice");
+        /// Ensure that only one test runs at a time. Because they are dependent
+        /// on the timers, parallel tests can cause unexpected failures.
+        static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
     }
 
     const MAX_TIMEOUT: time::Duration = time::Duration::from_secs(60);
+    const MARGIN: time::Duration = time::Duration::from_millis(10);
 
     #[test]
     fn test_ok() {
@@ -105,11 +111,10 @@ mod test_expiry_service {
         let expiry = ExpiryService::new(ADDRESS.clone(), MAX_TIMEOUT, receiver);
 
         let future = expiry.call(PREPARE.clone())
-            .then(|response| {
-                assert_eq!(response, Ok(FULFILL.clone()));
-                ok(())
+            .map(|fulfill| {
+                assert_eq!(fulfill, FULFILL.clone());
             });
-        tokio::run(future);
+        tokio_run(future);
     }
 
     #[test]
@@ -121,13 +126,13 @@ mod test_expiry_service {
         let expiry = ExpiryService::new(ADDRESS.clone(), MAX_TIMEOUT, receiver);
 
         let future = expiry.call(prepare)
-            .then(|response| {
-                let reject = response.unwrap_err();
+            .then(|response| -> FutureResult<(), ()> {
+                let reject = response.expect_err("expeceted Reject");
                 assert_eq!(reject.code(), ilp::ErrorCode::R02_INSUFFICIENT_TIMEOUT);
                 assert_eq!(reject.message(), b"insufficient timeout");
                 ok(())
             });
-        tokio::run(future);
+        tokio_run(future);
     }
 
     #[test]
@@ -137,36 +142,48 @@ mod test_expiry_service {
         prepare.set_expires_at(time::SystemTime::now() + SOON);
 
         let receiver = MockService::new(Ok(FULFILL.clone()));
-        let receiver = DelayService::new(
-            SOON + time::Duration::from_millis(1),
-            receiver,
-        );
+        let receiver = DelayService::new(SOON + MARGIN, receiver);
         let expiry = ExpiryService::new(ADDRESS.clone(), MAX_TIMEOUT, receiver);
 
         let future = expiry.call(prepare)
-            .then(|response| {
-                let reject = response.unwrap_err();
+            .then(|response| -> FutureResult<(), ()> {
+                let reject = response.expect_err("expeceted Reject");
                 assert_eq!(reject.code(), ilp::ErrorCode::R00_TRANSFER_TIMED_OUT);
                 assert_eq!(reject.message(), b"request timed out");
                 ok(())
             });
-        tokio::run(future);
+        tokio_run(future);
     }
 
     #[test]
     fn test_max_timeout() {
         const MAX_TIMEOUT: time::Duration = time::Duration::from_millis(15);
         let receiver = MockService::new(Ok(FULFILL.clone()));
-        let receiver = DelayService::new(time::Duration::from_millis(20), receiver);
+        let receiver = DelayService::new(MAX_TIMEOUT + MARGIN, receiver);
         let expiry = ExpiryService::new(ADDRESS.clone(), MAX_TIMEOUT, receiver);
 
         let future = expiry.call(PREPARE.clone())
-            .then(|response| {
-                let reject = response.unwrap_err();
+            .then(|response| -> FutureResult<(), ()> {
+                let reject = response.expect_err("expected Reject");
                 assert_eq!(reject.code(), ilp::ErrorCode::R00_TRANSFER_TIMED_OUT);
                 assert_eq!(reject.message(), b"request timed out");
                 ok(())
             });
-        tokio::run(future);
+        tokio_run(future);
+    }
+
+    /// This helper is needed because `tokio::run` ignores panics (see
+    /// <https://github.com/tokio-rs/tokio/issues/495>).
+    fn tokio_run<F, R, E>(future: F)
+    where
+        F: Send + 'static + Future<Item = R, Error = E>,
+        R: Send + 'static,
+        E: Send + 'static + fmt::Debug,
+    {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        tokio::runtime::Runtime::new()
+            .expect("new runtime")
+            .block_on(future)
+            .unwrap();
     }
 }

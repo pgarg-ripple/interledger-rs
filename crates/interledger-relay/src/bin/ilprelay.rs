@@ -1,56 +1,56 @@
+use std::env;
+use std::net::SocketAddr;
+use std::process;
+
 use futures::prelude::*;
-use hyper::Uri;
+use log::{error, info};
 
-use interledger_relay::{AuthToken, NextHop, Route};
-use interledger_relay::app::{ConnectorAddress, ConnectorBuilder};
+use interledger_relay::app;
 
-//struct Config (maybe in another module)
+// TODO filter path?
 
 fn main() {
-    // TODO config from json
-    let start_connector = ConnectorBuilder {
-        //net_addr: ...
-        //ilp_addr: b"example.alice".to_vec(),
-        address: ConnectorAddress::Static {
-            address: b"example.alice".to_vec(),
-            asset_scale: 9,
-            asset_code: b"XRP".to_vec(),
-        },
-        auth_tokens: vec![
-            AuthToken::new(b"secret".to_vec()),
-        ],
-        routes: vec![
-            Route::new(
-                b"".to_vec(),
-                NextHop::Unilateral {
-                    endpoint: "http://127.0.0.1:3002/ilp".parse::<Uri>().unwrap(),
-                    auth: None,
-                },
-            ),
-        ],
-    }.build();
+    env_logger::init();
 
-    //let start_connector = start_connector
-    //    .map_err(|error| {
-    //        panic!(format!("error starting connector: {}", error));
-    //    });
+    let bind_addr = env::var("RELAY_BIND")
+        .unwrap_or_else(|_| {
+            eprintln!("missing env.RELAY_BIND");
+            process::exit(1);
+        })
+        .parse::<SocketAddr>()
+        .unwrap_or_else(|error| {
+            eprintln!("invalid env.RELAY_BIND: {}", error);
+            process::exit(1);
+        });
 
-    let run_server = start_connector
-        .and_then(|connector| {
-            hyper::Server::bind(&([127, 0, 0, 1], 3001).into())
-                // NOTE: `hyper::Error` is a placeholder.. The "never" type would
-                // be better once it's stable.
+    let config = env::var("RELAY_CONFIG")
+        .unwrap_or_else(|_| {
+            eprintln!("missing env.RELAY_CONFIG");
+            process::exit(1);
+        });
+    let config: app::Config = serde_json::from_str(&config)
+        .unwrap_or_else(|error| {
+            eprintln!("invalid env.RELAY_CONFIG: {}", error);
+            process::exit(1);
+        });
+
+    let run_server = config
+        .start()
+        .map_err(|error| {
+            error!("error starting connector: {}", error);
+        })
+        .and_then(move |connector| {
+            info!("listening at: addr={}", bind_addr);
+            hyper::Server::bind(&bind_addr)
+                // NOTE: this never actually returns an error (which is also why
+                // the closure needs a semi-explicit return type>
                 .serve(move || -> Result<_, hyper::Error> {
                     Ok(connector.clone())
                 })
                 .map_err(|error| {
-                    eprintln!("server error: {}", error)
+                    error!("server error: {}", error)
                 })
         });
-        // XXX?
-        //.map_err(|error| {
-        //    eprintln!("server error: {}", error);
-        //});
 
     hyper::rt::run(run_server);
 }

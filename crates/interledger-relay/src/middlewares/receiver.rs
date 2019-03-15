@@ -4,11 +4,12 @@ use bytes::{Bytes, BytesMut};
 use futures::future::{Either, ok};
 use futures::prelude::*;
 use hyper::StatusCode;
+use log::warn;
 
 use crate::{Request, Service};
 use crate::services;
 
-static PEER_NAME: &'static [u8] = b"ILP-Peer-Name";
+static PEER_NAME: &'static str = "ILP-Peer-Name";
 
 #[derive(Clone, Debug)]
 pub struct Receiver<S> {
@@ -49,13 +50,13 @@ where
     {
         let next = self.next.clone();
         let (parts, body) = req.into_parts();
-        // TODO timeout? max amount?
         body
             .concat2()
             .and_then(move |chunk| {
                 let buffer = Bytes::from(chunk);
                 // `BytesMut::from(chunk)` calls `try_mut`, and only copies the
-                // data if that fails (e.g. if the buffer is `KIND_STATIC`).
+                // data if that fails (e.g. if the buffer is `KIND_STATIC`, which
+                // probably only happens in the tests).
                 let buffer = BytesMut::from(buffer);
                 match ilp::Prepare::try_from(buffer) {
                     Ok(prepare) => Either::A({
@@ -68,12 +69,13 @@ where
                                 Ok(make_http_response(res_packet))
                             })
                     }),
-                    Err(_error) => Either::B({
-                        ok(hyper::Response::builder()
+                    Err(error) => Either::B(ok({
+                        warn!("error parsing incoming prepare: {}", error);
+                        hyper::Response::builder()
                             .status(StatusCode::BAD_REQUEST)
                             .body(hyper::Body::from("Error parsing ILP Prepare"))
-                            .expect("response builder error"))
-                    }),
+                            .expect("response builder error")
+                    })),
                 }
             })
     }
@@ -101,8 +103,8 @@ impl Borrow<ilp::Prepare> for RequestWithHeaders {
 
 impl services::RequestWithPeerName for RequestWithHeaders {
     fn peer_name(&self) -> Option<&[u8]> {
-        // TODO I think this copies the name into a HeaderName every call
-        self.headers.get("ILP-Peer-Name")
+        // TODO I think this copies the name into a HeaderName every call, which isn't ideal
+        self.headers.get(PEER_NAME)
             .map(|header| header.as_ref())
     }
 }
@@ -125,6 +127,7 @@ fn make_http_response(packet: Result<ilp::Fulfill, ilp::Reject>)
 
 #[cfg(test)]
 mod test_receiver {
+    use crate::services::RequestWithPeerName;
     use crate::testing::{IlpResult, MockService, PanicService};
     use crate::testing::{PREPARE, FULFILL, REJECT};
     use super::*;
@@ -170,13 +173,13 @@ mod test_receiver {
         let content_len = response.headers()
             .get("Content-Length").unwrap()
             .to_str().unwrap()
-            .to_owned();
+            .parse::<usize>().unwrap();
         let body = response
             .into_body()
             .concat2()
             .wait().unwrap();
 
-        assert_eq!(content_len, body.len().to_string());
+        assert_eq!(content_len, body.len());
         assert_eq!(
             body.as_ref(),
             match &ilp_response {
@@ -204,5 +207,20 @@ mod test_receiver {
             body.as_ref(),
             b"Error parsing ILP Prepare",
         );
+    }
+
+    #[test]
+    fn test_peer_name() {
+        let service = Receiver::new(|req: RequestWithHeaders| {
+            assert_eq!(req.peer_name(), Some(&b"alice"[..]));
+            ok(FULFILL.clone())
+        });
+
+        let request = hyper::Request::post(URI)
+            .header("ILP-Peer-Name", "alice")
+            .body(hyper::Body::from(PREPARE.as_bytes()))
+            .unwrap();
+        let response = service.handle(request).wait().unwrap();
+        assert_eq!(response.status(), 200);
     }
 }

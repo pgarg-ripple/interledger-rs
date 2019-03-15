@@ -8,14 +8,19 @@ edition = "2018"
 
 [dependencies]
 byteorder = "1.2.7"
-bytes = "0.4.11"
+bytes = { version = "0.4.11", features = ["serde"] }
 chrono = "0.4.6"
 hex = "0.3.2"
 quick-error = "1.2.2"
+serde = { version = "1.0", features = ["derive"], optional = true }
 
 [dev-dependencies]
 criterion = "0.2.9"
-lazy_static = "1.2.0"
+lazy_static = "1.2"
+# "serde" is both here and in `[dependencies]` to ensure it is included during
+# testing, but optional otherwise.
+serde = { version = "1.0", features = ["derive"] }
+serde_test = "1.0"
 
 [[bench]]
 name = "packets"

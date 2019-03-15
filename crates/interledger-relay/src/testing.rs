@@ -11,13 +11,15 @@ use lazy_static::lazy_static;
 use tokio::runtime::Runtime;
 use tokio::timer::Delay;
 
-use super::{NextHop, Request, Route, Service};
+use crate::{AuthToken, NextHop, Request, Route, Service};
 
 const EXPIRES_IN: Duration = Duration::from_secs(20);
 
 pub static RECEIVER_ORIGIN: &'static str = "http://127.0.0.1:3001";
 static RECEIVER_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 3001);
-pub static ADDRESS: &'static [u8] = b"test.relay";
+pub static ADDRESS: ilp::Addr<'static> = unsafe {
+    ilp::Addr::new_unchecked(b"test.relay")
+};
 
 lazy_static! {
     pub static ref PREPARE: ilp::Prepare = ilp::PrepareBuilder {
@@ -27,7 +29,7 @@ lazy_static! {
             \x11\x7b\x43\x4f\x1a\x54\xe9\x04\x4f\x4f\x54\x92\x3b\x2c\xff\x9e\
             \x4a\x6d\x42\x0a\xe2\x81\xd5\x02\x5d\x7b\xb0\x40\xc4\xb4\xc0\x4a\
         ",
-        destination: b"test.alice.1234",
+        destination: ilp::Addr::new(b"test.alice.1234"),
         data: b"prepare data",
     }.build();
 
@@ -38,7 +40,7 @@ lazy_static! {
             \x11\x7b\x43\x4f\x1a\x54\xe9\x04\x4f\x4f\x54\x92\x3b\x2c\xff\x9e\
             \x4a\x6d\x42\x0a\xe2\x81\xd5\x02\x5d\x7b\xb0\x40\xc4\xb4\xc0\x4a\
         ",
-        destination: b"test.relay.1234.5678",
+        destination: ilp::Addr::new(b"test.relay.1234.5678"),
         data: b"prepare data",
     }.build();
 
@@ -53,31 +55,31 @@ lazy_static! {
     pub static ref REJECT: ilp::Reject = ilp::RejectBuilder {
         code: ilp::ErrorCode::F99_APPLICATION_ERROR,
         message: b"Some error",
-        triggered_by: b"example.connector",
+        triggered_by: ilp::Addr::new(b"example.connector"),
         data: b"reject data",
     }.build();
 
     pub static ref ROUTES: Vec<Route> = vec![
         Route::new(
-            b"test.alice.".to_vec(),
-            NextHop::Unilateral {
+            Bytes::from("test.alice."),
+            NextHop::Bilateral {
                 endpoint: format!("{}/alice", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
-                auth: Some(Bytes::from("alice_auth")),
+                auth: Some(AuthToken::new("alice_auth")),
             },
         ),
         Route::new(
-            b"test.relay.".to_vec(),
+            Bytes::from("test.relay."),
             NextHop::Multilateral {
-                uri_prefix: Bytes::from(format!("{}/bob/", RECEIVER_ORIGIN)),
-                uri_suffix: Bytes::from("/ilp"),
-                auth: Some(Bytes::from("bob_auth")),
+                endpoint_prefix: Bytes::from(format!("{}/bob/", RECEIVER_ORIGIN)),
+                endpoint_suffix: Bytes::from("/ilp"),
+                auth: Some(AuthToken::new("bob_auth")),
             },
         ),
         Route::new(
-            b"".to_vec(),
-            NextHop::Unilateral {
+            Bytes::from(""),
+            NextHop::Bilateral {
                 endpoint: format!("{}/default", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
-                auth: Some(Bytes::from("default_auth")),
+                auth: Some(AuthToken::new("default_auth")),
             },
         ),
     ];
@@ -126,7 +128,7 @@ impl<Req: Request> Service<Req> for MockService {
     }
 }
 
-/// Wait before responding.
+/// Waits before responding.
 #[derive(Clone, Debug)]
 pub struct DelayService<S> {
     delay: Duration,
@@ -159,6 +161,7 @@ where
     }
 }
 
+/// Dummy service to verify that no prepares arrive.
 #[derive(Clone, Debug)]
 pub struct PanicService;
 
@@ -167,8 +170,9 @@ impl<Req: Request> Service<Req> for PanicService {
         Item = ilp::Fulfill,
         Error = ilp::Reject,
     > + Send + 'static>;
-    fn call(self, _request: Req) -> Self::Future {
-        panic!("PanicService received prepare");
+
+    fn call(self, request: Req) -> Self::Future {
+        panic!("PanicService received prepare={:?}", request.borrow());
     }
 }
 

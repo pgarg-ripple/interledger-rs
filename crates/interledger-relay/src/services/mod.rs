@@ -1,7 +1,9 @@
+mod debug;
 mod expiry;
 mod ildcp;
-mod relay;
+mod router;
 
+pub use self::debug::DebugService;
 pub use self::expiry::ExpiryService;
 pub use self::ildcp::{ConfigService, RequestWithPeerName};
-pub use self::relay::RelayService;
+pub use self::router::RouterService;

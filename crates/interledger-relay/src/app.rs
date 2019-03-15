@@ -1,144 +1,180 @@
-//use std::error::Error as StdError;
-//use std::net;
+use std::borrow::Borrow;
+use std::error;
+use std::fmt;
 use std::time;
 
-use bytes::Bytes;
 use futures::future::{Either, ok};
 use futures::prelude::*;
 use hyper::Uri;
+use serde::Deserialize;
 
-use crate::{ClientBuilder, Route};
-use crate::middlewares::{AuthToken, AuthTokenFilter, MethodFilter, Receiver};
-use crate::services::{ConfigService, ExpiryService, RelayService};
+use crate::{AuthToken, Client, Route};
+use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, Receiver};
+use crate::serde::deserialize_uri;
+use crate::services::{ConfigService, DebugService, ExpiryService, RouterService};
 use ilp::ildcp;
 
-// TODO
 /// The maximum duration that the outgoing HTTP client will wait for a response,
 /// even if the Prepare's expiry is longer.
 const DEFAULT_MAX_TIMEOUT: time::Duration = time::Duration::from_secs(60);
 
-#[derive(Debug)]
-pub struct ConnectorBuilder {
-    //pub name: Vec<u8>, // TODO or in the route?
-    // TODO rename field, to avoid address.address
-    pub address: ConnectorAddress,
-    //pub relation: ConnectorRelation,
-    //pub ilp_addr: Vec<u8>,
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct Config {
+    pub root: ConnectorRoot,
+    /// Incoming requests must present one of these tokens in the
+    /// `Authorization` header.
     pub auth_tokens: Vec<AuthToken>,
     pub routes: Vec<Route>,
 }
 
-/* TODO
-pub struct Config {
-    pub net_addr: net::SocketAddr,
-    pub ilp_addr: Vec<u8>,
-    pub routes: Vec<Route<hyper::Uri>>,
-}
-*/
-
-// TODO test dynamic and static
-#[derive(Debug)]
-pub enum ConnectorAddress {
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(tag = "type")]
+pub enum ConnectorRoot {
     Static {
-        address: Vec<u8>,
+        address: ilp::Address,
         asset_scale: u8,
-        asset_code: Vec<u8>,
-        //address: Bytes,
+        asset_code: String,
     },
     Dynamic {
+        #[serde(deserialize_with = "deserialize_uri")]
         parent_endpoint: Uri,
-        parent_auth: Vec<u8>,
-        name: Vec<u8>, // TODO should this be optional?
+        parent_auth: AuthToken,
+        // TODO should "name" be optional?
+        name: String,
     },
 }
 
+// TODO `impl Future<Item = impl hyper::Service ...>?
+// Hide spurious "type alias is never used" compilation warning. See:
+//   * <https://github.com/rust-lang/rust/issues/47131>
+//   * <https://github.com/rust-lang/rust/issues/54234>
+#[allow(dead_code)]
 type Connector =
-    MethodFilter<AuthTokenFilter<
+    HealthCheckFilter<MethodFilter<AuthTokenFilter<
         Receiver<
-            ExpiryService<ConfigService<RelayService>>,
+        DebugService<
+            ExpiryService<ConfigService<
+                DebugService<
+                RouterService,
+                >,
+            >>,
         >,
-    >>;
+        >,
+    >>>;
 
-impl ConnectorBuilder {
-    pub fn build(self) -> impl Future<
-        Item = Connector,
-        //Error = ilp::ParseError,
-        // TODO use an actual error
-        Error = (),
-    > {
-        self.address.load_config().map(move |ildcp| {
-            let address = Bytes::from(ildcp.client_address());
+impl Config {
+    pub fn start(self) -> impl Future<Item = Connector, Error = SetupError> {
+        self.root.load_config().map(move |ildcp| {
+            let address = ildcp.client_address().to_address();
 
-            let client = ClientBuilder::new(address.clone()).build();
-            let relay_svc = RelayService::new(client, self.routes);
-            let ildcp_svc = ConfigService::new(ildcp, relay_svc);
-            let expiry_svc = ExpiryService::new(address, DEFAULT_MAX_TIMEOUT, ildcp_svc);
+            let client = Client::new(address.clone());
+            let router_svc = RouterService::new(client, self.routes);
+            let router_svc = DebugService::new("outgoing", router_svc);
+            let ildcp_svc = ConfigService::new(ildcp, router_svc);
+            let expiry_svc =
+                ExpiryService::new(address, DEFAULT_MAX_TIMEOUT, ildcp_svc);
+
+            let expiry_svc = DebugService::new("incoming", expiry_svc);
 
             let receiver = Receiver::new(expiry_svc);
             let auth_filter = AuthTokenFilter::new(self.auth_tokens, receiver);
-            MethodFilter::new(hyper::Method::POST, auth_filter)
+            let method_filter = MethodFilter::new(hyper::Method::POST, auth_filter);
+            HealthCheckFilter::new(method_filter)
         })
     }
 }
 
-impl ConnectorAddress {
-    // TODO maybe return &[u8]
+impl ConnectorRoot {
     fn load_config(&self)
-        -> impl Future<Item = ildcp::Response, Error = ()>
+        -> impl Future<Item = ildcp::Response, Error = SetupError>
     {
-        use ConnectorAddress::*;
         match self {
-            Static {
+            ConnectorRoot::Static {
                 address,
                 asset_code,
                 asset_scale,
             } => Either::A(ok(ildcp::ResponseBuilder {
-                client_address: &address,
-                asset_code: &asset_code,
+                client_address: address.as_addr(),
+                asset_code: asset_code.as_bytes(),
                 asset_scale: *asset_scale,
             }.build())),
-            // TODO ildcp::fetch()
-            Dynamic {
+            ConnectorRoot::Dynamic {
                 parent_endpoint,
                 parent_auth,
                 name,
-            } => Either::B({
-                let client = ClientBuilder::new(Bytes::new()).build();
-                let mut request = hyper::Request::builder();
-                request.method(hyper::Method::POST);
-                request.uri(parent_endpoint);
-                request.header(hyper::header::AUTHORIZATION, &parent_auth[..]);
-                request.header("ILP-Peer-Name", &name[..]);
-
-                let prepare = ildcp::Request::new().to_prepare();
-                client.request(request, prepare)
-                    .then(|result| {
-                        // XXX dont unwrap
-                        let fulfill = result.unwrap();
-                        ok(ildcp::Response::try_from(fulfill)
-                            .unwrap()) // XXX dont unwrap
-                            //.map(|response| Bytes::from(response.client_address()))
-                            //.map_err(|error| Box::new(error))
-                    })
-                    //.then(|result| match result {
-                    //    Ok(fulfill) => {
-                    //        ildcp::Response::try_from(fulfill)
-                    //            .map_err(|error| Box::new(error))
-                    //    },
-                    //    Err(reject) => Err(Box::new(format!(
-                    //        "error fetching address from parent code={} message={:?}",
-                    //        reject.code(), reject.message(),
-                    //    ))),
-                    //})
-                    //.map(|response| response.client_address())
-            }),
+            } => Either::B(fetch_ildcp(
+                parent_endpoint,
+                parent_auth.borrow(),
+                name.as_bytes(),
+            )),
         }
     }
 }
 
+fn fetch_ildcp(endpoint: &Uri, auth: &[u8], peer_name: &[u8])
+    -> impl Future<Item = ildcp::Response, Error = SetupError>
+{
+    let mut request = hyper::Request::builder();
+    request.method(hyper::Method::POST);
+    request.uri(endpoint);
+    request.header(hyper::header::AUTHORIZATION, auth);
+    request.header("ILP-Peer-Name", peer_name);
+    let prepare = ildcp::Request::new().to_prepare();
+
+    // Use a dummy address as the sender since the connector doesn't know its
+    // address yet.
+    Client::new(ilp::Address::new(b"self.ildcp"))
+        .request(request, prepare)
+        .from_err()
+        .and_then(|fulfill| {
+            ildcp::Response::try_from(fulfill)
+                .into_future()
+                .from_err()
+        })
+}
+
+#[derive(Debug)]
+pub struct SetupError(ErrorKind);
+
+#[derive(Debug)]
+enum ErrorKind {
+    ParseError(ilp::ParseError),
+    Reject(ilp::Reject),
+}
+
+impl error::Error for SetupError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match &self.0 {
+            ErrorKind::ParseError(inner) => Some(inner),
+            ErrorKind::Reject(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for SetupError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.0 {
+            ErrorKind::ParseError(inner) => write!(f, "SetupError({})", inner),
+            ErrorKind::Reject(reject) => write!(f, "SetupError({:?})", reject),
+        }
+    }
+}
+
+impl From<ilp::ParseError> for SetupError {
+    fn from(inner: ilp::ParseError) -> Self {
+        SetupError(ErrorKind::ParseError(inner))
+    }
+}
+
+impl From<ilp::Reject> for SetupError {
+    fn from(reject: ilp::Reject) -> Self {
+        SetupError(ErrorKind::Reject(reject))
+    }
+}
+
 #[cfg(test)]
-mod test_connector_builder {
-    use futures::prelude::*;
+mod test_config {
+    use hyper::service::Service;
 
     use crate::testing::{self, FULFILL, PREPARE};
     use super::*;
@@ -146,17 +182,108 @@ mod test_connector_builder {
     static CONNECTOR_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 3002);
 
     #[test]
-    fn test_relay() {
-        let start_connector = ConnectorBuilder {
-            //ilp_addr: b"example.alice".to_vec(),
-            address: ConnectorAddress::Static {
-                address: b"example.alice".to_vec(),
+    fn test_static() {
+        let connector = Config {
+            root: ConnectorRoot::Static {
+                address: ilp::Address::new(b"example.alice"),
                 asset_scale: 9,
-                asset_code: b"XRP".to_vec(),
+                asset_code: "XRP".to_owned(),
+            },
+            auth_tokens: vec![AuthToken::new("secret")],
+            routes: testing::ROUTES.clone(),
+        };
+
+        let future = connector
+            .start()
+            .map_err(|err| panic!(err))
+            .and_then(|mut connector| {
+                connector.call({
+                    hyper::Request::post("http://127.0.0.1:3002/ilp")
+                        .header("Authorization", "secret")
+                        .body(hyper::Body::from(PREPARE.as_bytes()))
+                        .unwrap()
+                })
+            })
+            .map_err(|err| panic!(err))
+            .map(|response| {
+                assert_eq!(response.status(), 200);
+            });
+
+        testing::MockServer::new()
+            .test_request(|req| {
+                assert_eq!(req.method(), hyper::Method::POST);
+                assert_eq!(req.uri().path(), "/alice");
+            })
+            .test_body(|body| {
+                assert_eq!(body.as_ref(), PREPARE.as_bytes());
+            })
+            .with_response(|| {
+                hyper::Response::builder()
+                    .status(200)
+                    .body(hyper::Body::from(FULFILL.as_bytes()))
+                    .unwrap()
+            })
+            .run(future);
+    }
+
+/*
+    #[test]
+    fn test_dynamic() {
+        let connector = ConnectorBuilder {
+            root: ConnectorRoot::Dynamic {
+                parent_endpoint: format!("{}/bob", testing::RECEIVER_ORIGIN),
+                parent_auth: b"receiver_secret".to_vec(),
+                name: b"carl".to_vec(),
             },
             auth_tokens: vec![AuthToken::new(b"secret".to_vec())],
             routes: testing::ROUTES.clone(),
-        }.build();
+        };
+
+        let future = connector.build()
+            .map_err(|err| panic!(err))
+            .and_then(|mut connector| {
+                connector.call({
+                    hyper::Request::post("http://127.0.0.1:3002/ilp")
+                        .header("Authorization", "secret")
+                        .body(hyper::Body::from(PREPARE.as_bytes()))
+                        .unwrap()
+                })
+            })
+            .map_err(|err| panic!(err))
+            .map(|response| {
+                assert_eq!(response.status(), 200);
+            });
+
+        testing::MockServer::new()
+            .test_request(|req| {
+                assert_eq!(req.method(), hyper::Method::POST);
+                assert_eq!(req.uri().path(), "/alice");
+            })
+            .test_body(|body| {
+                assert_eq!(body.as_ref(), PREPARE.as_bytes());
+            })
+            .with_response(|| {
+                hyper::Response::builder()
+                    .status(200)
+                    .body(hyper::Body::from(FULFILL.as_bytes()))
+                    .unwrap()
+            })
+            .run(future);
+    }
+*/
+
+    // TODO maybe add an actual integration test using stream, and remove this one
+    #[test]
+    fn test_integration() {
+        let start_connector = Config {
+            root: ConnectorRoot::Static {
+                address: ilp::Address::new(b"example.alice"),
+                asset_scale: 9,
+                asset_code: "XRP".to_owned(),
+            },
+            auth_tokens: vec![AuthToken::new("secret")],
+            routes: testing::ROUTES.clone(),
+        }.start();
 
         let request = hyper::Client::new()
             .request({
@@ -179,17 +306,13 @@ mod test_connector_builder {
                     Ok(connector.clone())
                 })
                 .with_graceful_shutdown(request)
-                .map_err(|err| panic!(err))
+                .map_err(|err| panic!("unexpected error: {}", err))
         });
 
         testing::MockServer::new()
             .test_request(|req| {
                 assert_eq!(req.method(), hyper::Method::POST);
                 assert_eq!(req.uri().path(), "/alice");
-                assert_eq!(
-                    req.headers().get("Content-Type").unwrap(),
-                    "application/octet-stream",
-                );
             })
             .test_body(|body| {
                 assert_eq!(body.as_ref(), PREPARE.as_bytes());
@@ -201,5 +324,83 @@ mod test_connector_builder {
                     .unwrap()
             })
             .run(start_server);
+    }
+}
+
+#[cfg(test)]
+mod test_connector_root {
+    use bytes::{Bytes, BytesMut};
+
+    use crate::testing::{self, RECEIVER_ORIGIN};
+    use super::*;
+
+    #[test]
+    fn test_static() {
+        let root = ConnectorRoot::Static {
+            address: ilp::Address::new(b"test.alice"),
+            asset_scale: 9,
+            asset_code: "XRP".to_owned(),
+        };
+        assert_eq!(
+            root.load_config().wait().unwrap(),
+            ildcp::ResponseBuilder {
+                client_address: ilp::Addr::new(b"test.alice"),
+                asset_scale: 9,
+                asset_code: b"XRP",
+            }.build(),
+        );
+    }
+
+    #[test]
+    fn test_dynamic() {
+        let root = ConnectorRoot::Dynamic {
+            parent_endpoint: RECEIVER_ORIGIN.parse().unwrap(),
+            parent_auth: AuthToken::new("parent_secret"),
+            name: "carl".to_owned(),
+        };
+
+        static PARENT_RESPONSE: ildcp::ResponseBuilder<'static> =
+            ildcp::ResponseBuilder {
+                client_address: unsafe {
+                    ilp::Addr::new_unchecked(b"test.parent.carl")
+                },
+                asset_scale: 9,
+                asset_code: b"XRP",
+            };
+
+        let load_config = root.load_config()
+            .map(|response| {
+                assert_eq!(response, PARENT_RESPONSE.build());
+            });
+
+        testing::MockServer::new()
+            .test_request(|req| {
+                assert_eq!(req.method(), hyper::Method::POST);
+                assert_eq!(
+                    req.headers().get("Authorization").unwrap(),
+                    "parent_secret",
+                );
+                assert_eq!(
+                    req.headers().get("ILP-Peer-Name").unwrap(),
+                    "carl",
+                );
+            })
+            .test_body(|body| {
+                let body = Bytes::from(body);
+                let body = BytesMut::from(body);
+                let prepare = ilp::Prepare::try_from(body).unwrap();
+                ildcp::Request::try_from(prepare)
+                    .expect("invalid ildcp request");
+            })
+            .with_response(|| {
+                let response = PARENT_RESPONSE.build();
+                let fulfill = ilp::Fulfill::from(response);
+                let response = BytesMut::from(fulfill);
+                hyper::Response::builder()
+                    .status(200)
+                    .body(hyper::Body::from(response.freeze()))
+                    .unwrap()
+            })
+            .run(load_config);
     }
 }
