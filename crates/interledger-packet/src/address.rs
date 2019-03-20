@@ -10,7 +10,7 @@ use std::error;
 use std::fmt;
 use std::str;
 
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 
 const MAX_ADDRESS_LENGTH: usize = 1023;
 
@@ -46,6 +46,10 @@ impl Address {
         self.as_addr().scheme()
     }
 
+    pub fn with_suffix(&self, segment: &[u8]) -> Result<Self, AddressError> {
+        self.as_addr().with_suffix(segment)
+    }
+
     #[inline]
     pub fn as_addr(&self) -> Addr {
         Addr(self.0.as_ref())
@@ -74,6 +78,12 @@ impl AsRef<Bytes> for Address {
 impl Borrow<Bytes> for Address {
 }
 */
+
+impl AsRef<[u8]> for Address {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
 
 /// A borrowed ILP address.
 ///
@@ -139,6 +149,17 @@ impl<'a> Addr<'a> {
             .split(|&byte| byte == b'.')
             .next()
             .unwrap()
+    }
+
+    pub fn with_suffix(&self, segment: &[u8]) -> Result<Address, AddressError> {
+        let new_address_len = self.len() + 1 + segment.len();
+        let mut new_address = BytesMut::with_capacity(new_address_len);
+
+        new_address.put_slice(self.0.as_ref());
+        new_address.put(b'.');
+        new_address.put_slice(segment);
+
+        Address::try_from(new_address.freeze())
     }
 }
 
@@ -346,6 +367,21 @@ mod test_addr {
             Addr::new(b"test.alice.1234").scheme(),
             b"test",
         );
+    }
+
+    #[test]
+    fn test_with_suffix() {
+        assert_eq!(
+            Addr::new(b"test.alice")
+                .with_suffix(b"1234")
+                .unwrap(),
+            Address::new(b"test.alice.1234"),
+        );
+        assert!({
+            Addr::new(b"test.alice")
+                .with_suffix(b"12 34")
+                .is_err()
+        });
     }
 
     #[test]

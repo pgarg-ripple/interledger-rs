@@ -186,6 +186,7 @@ impl Prepare {
         let addr_bytes = (&self.buffer[offset..])
             .peek_var_octet_string()
             .unwrap();
+        // TODO should this be new_unchecked?
         Addr::try_from(addr_bytes).unwrap()
     }
 
@@ -410,6 +411,7 @@ impl Reject {
         let address_bytes = (&self.buffer[self.triggered_by_offset..])
             .peek_var_octet_string()
             .unwrap();
+        // TODO should this be new_unchecked?
         Addr::try_from(address_bytes).unwrap()
     }
 
