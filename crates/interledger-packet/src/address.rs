@@ -19,13 +19,18 @@ const MAX_ADDRESS_LENGTH: usize = 1023;
 pub struct Address(Bytes);
 
 impl Address {
+    /// # Panics
+    ///
+    /// Panics if the bytes are not a valid ILP address.
     pub fn new(bytes: &'static [u8]) -> Self {
         Address::try_from(Bytes::from(bytes)).expect("invalid ILP address")
     }
 
-    /// # Panics
+    /// Creates an ILP address without validating the bytes.
     ///
-    /// Panics if the bytes are not a valid ILP address.
+    /// # Safety
+    ///
+    /// The given bytes must be a valid ILP address.
     #[inline]
     pub const unsafe fn new_unchecked(bytes: Bytes) -> Self {
         Address(bytes)
@@ -46,8 +51,8 @@ impl Address {
         self.as_addr().scheme()
     }
 
-    pub fn with_suffix(&self, segment: &[u8]) -> Result<Self, AddressError> {
-        self.as_addr().with_suffix(segment)
+    pub fn with_suffix(&self, suffix: &[u8]) -> Result<Self, AddressError> {
+        self.as_addr().with_suffix(suffix)
     }
 
     #[inline]
@@ -56,32 +61,31 @@ impl Address {
     }
 }
 
+impl AsRef<[u8]> for Address {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl AsRef<Bytes> for Address {
+    #[inline]
+    fn as_ref(&self) -> &Bytes {
+        &self.0
+    }
+}
+
 impl fmt::Debug for Address {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Address({:?})", str::from_utf8(&self.0).unwrap())
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.debug_tuple("Address")
+            .field(&str::from_utf8(&self.0).unwrap())
+            .finish()
     }
 }
 
 impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(str::from_utf8(&self.0).unwrap())
-    }
-}
-
-/* TODO what conversions are useful?
-impl From<Address> for Bytes {
-}
-
-impl AsRef<Bytes> for Address {
-}
-
-impl Borrow<Bytes> for Address {
-}
-*/
-
-impl AsRef<[u8]> for Address {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
     }
 }
 
@@ -151,33 +155,37 @@ impl<'a> Addr<'a> {
             .unwrap()
     }
 
-    pub fn with_suffix(&self, segment: &[u8]) -> Result<Address, AddressError> {
-        let new_address_len = self.len() + 1 + segment.len();
+    pub fn with_suffix(&self, suffix: &[u8]) -> Result<Address, AddressError> {
+        let new_address_len = self.len() + 1 + suffix.len();
         let mut new_address = BytesMut::with_capacity(new_address_len);
 
         new_address.put_slice(self.0.as_ref());
         new_address.put(b'.');
-        new_address.put_slice(segment);
+        new_address.put_slice(suffix);
 
         Address::try_from(new_address.freeze())
     }
 }
 
 impl<'a> AsRef<[u8]> for Addr<'a> {
+    #[inline]
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
 }
 
 impl<'a> Borrow<[u8]> for Addr<'a> {
+    #[inline]
     fn borrow(&self) -> &[u8] {
         &self.0
     }
 }
 
 impl<'a> fmt::Debug for Addr<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Addr({:?})", str::from_utf8(self.0).unwrap())
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.debug_tuple("Addr")
+            .field(&str::from_utf8(&self.0).unwrap())
+            .finish()
     }
 }
 

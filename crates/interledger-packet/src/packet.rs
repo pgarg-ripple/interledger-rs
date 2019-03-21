@@ -217,15 +217,17 @@ impl From<Prepare> for BytesMut {
 }
 
 impl fmt::Debug for Prepare {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f, "Prepare {{ destination: \"{}\", amount: {}, expires_at: {:?}, execution_condition: {}, data_length: {} }}",
-            self.destination(),
-            self.amount(),
-            DateTime::<Utc>::from(self.expires_at()).to_rfc3339(),
-            hex::encode(self.execution_condition()),
-            self.data().len(),
-        )
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.debug_struct("Prepare")
+            .field("destination", &self.destination())
+            .field("amount", &self.amount())
+            .field(
+                "expires_at",
+                &DateTime::<Utc>::from(self.expires_at()).to_rfc3339(),
+            )
+            .field("execution_condition", &hex::encode(self.execution_condition()))
+            .field("data_length", &self.data().len())
+            .finish()
     }
 }
 
@@ -328,13 +330,11 @@ impl From<Fulfill> for BytesMut {
 }
 
 impl fmt::Debug for Fulfill {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Fulfill {{ fulfillment: \"{}\", data_length: {} }}",
-            hex::encode(self.fulfillment()),
-            self.data().len(),
-        )
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.debug_struct("Fulfill")
+            .field("fulfillment", &hex::encode(self.fulfillment()))
+            .field("data_length", &self.data().len())
+            .finish()
     }
 }
 
@@ -448,15 +448,16 @@ impl From<Reject> for BytesMut {
 }
 
 impl fmt::Debug for Reject {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Reject {{ code: \"{}\", message: \"{}\", triggered_by: \"{}\", data_length: {} }}",
-            self.code(),
-            str::from_utf8(self.message()).map_err(|_| fmt::Error)?,
-            self.triggered_by(),
-            self.data().len(),
-        )
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.debug_struct("Reject")
+            .field("code", &self.code())
+            .field(
+                "message",
+                &str::from_utf8(self.message()).map_err(|_| fmt::Error)?,
+            )
+            .field("triggered_by", &self.triggered_by())
+            .field("data_length", &self.data().len())
+            .finish()
     }
 }
 
