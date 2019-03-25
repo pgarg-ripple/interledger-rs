@@ -59,6 +59,10 @@ impl Address {
     pub fn as_addr(&self) -> Addr {
         Addr(self.0.as_ref())
     }
+
+    fn as_str(&self) -> &str {
+        str::from_utf8(self.0.as_ref()).unwrap()
+    }
 }
 
 impl AsRef<[u8]> for Address {
@@ -78,14 +82,14 @@ impl AsRef<Bytes> for Address {
 impl fmt::Debug for Address {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.debug_tuple("Address")
-            .field(&str::from_utf8(&self.0).unwrap())
+            .field(&self.as_str())
             .finish()
     }
 }
 
 impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(str::from_utf8(&self.0).unwrap())
+        f.write_str(self.as_str())
     }
 }
 
@@ -165,6 +169,10 @@ impl<'a> Addr<'a> {
 
         Address::try_from(new_address.freeze())
     }
+
+    fn as_str(&self) -> &str {
+        str::from_utf8(self.0).unwrap()
+    }
 }
 
 impl<'a> AsRef<[u8]> for Addr<'a> {
@@ -184,43 +192,20 @@ impl<'a> Borrow<[u8]> for Addr<'a> {
 impl<'a> fmt::Debug for Addr<'a> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.debug_tuple("Addr")
-            .field(&str::from_utf8(&self.0).unwrap())
+            .field(&self.as_str())
             .finish()
     }
 }
 
 impl<'a> fmt::Display for Addr<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(str::from_utf8(self.0).unwrap())
+        f.write_str(self.as_str())
     }
 }
 
 impl<'a> PartialEq<[u8]> for Addr<'a> {
     fn eq(&self, other: &[u8]) -> bool {
         self.0 == other
-    }
-}
-
-#[cfg(any(feature = "serde", test))]
-impl<'de> serde::Deserialize<'de> for Address {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Addr::deserialize(deserializer)
-            .map(|addr| Address(Bytes::from(addr.as_ref())))
-    }
-}
-
-#[cfg(any(feature = "serde", test))]
-impl<'de> serde::Deserialize<'de> for Addr<'de> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let string = <&str>::deserialize(deserializer)?;
-        Addr::try_from(string.as_bytes())
-            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -252,9 +237,55 @@ impl fmt::Display for AddressError {
     }
 }
 
+#[cfg(any(feature = "serde", test))]
+mod serde_impls {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::*;
+
+    impl<'de> Deserialize<'de> for Address {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            Addr::deserialize(deserializer)
+                .map(|addr| Address(Bytes::from(addr.as_ref())))
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Addr<'de> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let string = <&str>::deserialize(deserializer)?;
+            Addr::try_from(string.as_bytes())
+                .map_err(serde::de::Error::custom)
+        }
+    }
+
+    impl Serialize for Address {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'a> Serialize for Addr<'a> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+}
+
 #[cfg(test)]
 mod test_address {
-    use serde_test::{Token, assert_de_tokens, assert_de_tokens_error};
+    use serde_test::{Token, assert_tokens, assert_de_tokens_error};
 
     use super::*;
 
@@ -265,18 +296,6 @@ mod test_address {
             Address(Bytes::from("test.alice")),
         );
         assert!(Address::try_from(Bytes::from("test.alice!")).is_err());
-    }
-
-    #[test]
-    fn test_deserialize() {
-        assert_de_tokens(
-            &Address::try_from(Bytes::from("test.alice")).unwrap(),
-            &[Token::BorrowedStr("test.alice")],
-        );
-        assert_de_tokens_error::<Address>(
-            &[Token::BorrowedStr("test.alice ")],
-            "AddressError",
-        );
     }
 
     #[test]
@@ -294,11 +313,23 @@ mod test_address {
             "test.alice",
         );
     }
+
+    #[test]
+    fn test_serde() {
+        assert_tokens(
+            &Address::try_from(Bytes::from("test.alice")).unwrap(),
+            &[Token::BorrowedStr("test.alice")],
+        );
+        assert_de_tokens_error::<Address>(
+            &[Token::BorrowedStr("test.alice ")],
+            "AddressError",
+        );
+    }
 }
 
 #[cfg(test)]
 mod test_addr {
-    use serde_test::{Token, assert_de_tokens, assert_de_tokens_error};
+    use serde_test::{Token, assert_tokens, assert_de_tokens_error};
 
     use super::*;
 
@@ -393,18 +424,6 @@ mod test_addr {
     }
 
     #[test]
-    fn test_deserialize() {
-        assert_de_tokens(
-            &Addr::new(b"test.alice"),
-            &[Token::BorrowedStr("test.alice")],
-        );
-        assert_de_tokens_error::<Addr>(
-            &[Token::BorrowedStr("test.alice ")],
-            "AddressError",
-        );
-    }
-
-    #[test]
     fn test_debug() {
         assert_eq!(
             format!("{:?}", Addr::new(b"test.alice")),
@@ -417,6 +436,18 @@ mod test_addr {
         assert_eq!(
             format!("{}", Addr::new(b"test.alice")),
             "test.alice",
+        );
+    }
+
+    #[test]
+    fn test_serde() {
+        assert_tokens(
+            &Addr::new(b"test.alice"),
+            &[Token::BorrowedStr("test.alice")],
+        );
+        assert_de_tokens_error::<Addr>(
+            &[Token::BorrowedStr("test.alice ")],
+            "AddressError",
         );
     }
 
