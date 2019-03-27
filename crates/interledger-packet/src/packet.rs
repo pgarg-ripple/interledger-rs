@@ -10,7 +10,7 @@ use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
 
 use super::oer::{self, BufOerExt, MutBufOerExt};
-use super::{ErrorCode, ParseError};
+use super::{ErrorCode, Error};
 
 const AMOUNT_LEN: usize = 8;
 const EXPIRY_LEN: usize = 17;
@@ -31,15 +31,12 @@ pub enum PacketType {
 
 impl PacketType {
     #[inline]
-    pub fn try_from(byte: u8) -> Result<Self, ParseError> {
+    pub fn try_from(byte: u8) -> Result<Self, Error> {
         match byte {
             12 => Ok(PacketType::Prepare),
             13 => Ok(PacketType::Fulfill),
             14 => Ok(PacketType::Reject),
-            _ => Err(ParseError::InvalidPacket(format!(
-                "Unknown packet type: {:?}",
-                byte,
-            ))),
+            _ => Err(Error::InvalidPacket(format!("unknown packet type: {:?}", byte))),
         }
     }
 }
@@ -52,15 +49,12 @@ pub enum Packet {
 }
 
 impl Packet {
-    pub fn try_from(buffer: BytesMut) -> Result<Self, ParseError> {
+    pub fn try_from(buffer: BytesMut) -> Result<Self, Error> {
         match buffer.first() {
             Some(&12) => Ok(Packet::Prepare(Prepare::try_from(buffer)?)),
             Some(&13) => Ok(Packet::Fulfill(Fulfill::try_from(buffer)?)),
             Some(&14) => Ok(Packet::Reject(Reject::try_from(buffer)?)),
-            _ => Err(ParseError::InvalidPacket(format!(
-                "Unknown packet type: {:?}",
-                buffer.first(),
-            ))),
+            _ => Err(Error::InvalidPacket(format!("unknown packet type: {:?}", buffer.first()))),
         }
     }
 }
@@ -113,7 +107,7 @@ pub struct PrepareBuilder<'a> {
 
 impl Prepare {
     // TODO change this to `TryFrom` when it is stabilized
-    pub fn try_from(buffer: BytesMut) -> Result<Self, ParseError> {
+    pub fn try_from(buffer: BytesMut) -> Result<Self, Error> {
         let (content_offset, mut content) = deserialize_envelope(PacketType::Prepare, &buffer)?;
         let content_len = content.len();
         let amount = content.read_u64::<BigEndian>()?;
@@ -262,7 +256,7 @@ pub struct FulfillBuilder<'a> {
 }
 
 impl Fulfill {
-    pub fn try_from(buffer: BytesMut) -> Result<Self, ParseError> {
+    pub fn try_from(buffer: BytesMut) -> Result<Self, Error> {
         let (content_offset, mut content) = deserialize_envelope(PacketType::Fulfill, &buffer)?;
 
         content.skip(FULFILLMENT_LEN)?;
@@ -351,7 +345,7 @@ pub struct RejectBuilder<'a> {
 }
 
 impl Reject {
-    pub fn try_from(buffer: BytesMut) -> Result<Self, ParseError> {
+    pub fn try_from(buffer: BytesMut) -> Result<Self, Error> {
         let (content_offset, mut content) = deserialize_envelope(PacketType::Reject, &buffer)?;
         let content_len = content.len();
 
@@ -455,7 +449,7 @@ impl<'a> RejectBuilder<'a> {
 fn deserialize_envelope(
     packet_type: PacketType,
     mut reader: &[u8],
-) -> Result<(usize, &[u8]), ParseError> {
+) -> Result<(usize, &[u8]), Error> {
     let got_type = reader.read_u8()?;
     if got_type == packet_type as u8 {
         let content_offset = 1 + {
@@ -468,10 +462,7 @@ fn deserialize_envelope(
         let content = reader.peek_var_octet_string()?;
         Ok((content_offset, content))
     } else {
-        Err(ParseError::InvalidPacket(format!(
-            "Unexpected packet type: {:?}",
-            got_type,
-        )))
+        Err(Error::InvalidPacket(format!("Unexpected packet type: {:?}", got_type)))
     }
 }
 

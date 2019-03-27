@@ -10,7 +10,7 @@ pub mod oer;
 mod packet;
 
 pub use self::error::{ErrorClass, ErrorCode};
-pub use self::errors::ParseError;
+pub use self::errors::Error;
 
 pub use self::packet::MaxPacketAmountDetails;
 pub use self::packet::{Fulfill, Packet, PacketType, Prepare, Reject};

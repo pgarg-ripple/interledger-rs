@@ -1,43 +1,83 @@
-use std::str::Utf8Error;
-use std::string::FromUtf8Error;
+use std::error;
+use std::fmt;
 
-use quick_error::quick_error;
+use std::io;
+use std::str;
+use std::string;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ParseError {
-        Io(err: std::io::Error) {
-            from()
-            description(err.description())
-            cause(err)
+
+#[derive(Debug)]
+pub enum Error {
+    Io(io::Error),
+    Utf8Error(str::Utf8Error),
+    FromUtf8Error(string::FromUtf8Error),
+    Chrono(chrono::ParseError),
+    InvalidPacket(String),
+    #[allow(dead_code)]
+    UnexpectedPacket(String),
+}
+
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::Io(ref e) => fmt::Display::fmt(e, f),
+            Error::Utf8Error(ref e) => fmt::Display::fmt(e, f),
+            Error::FromUtf8Error(ref e) => fmt::Display::fmt(e, f),
+            Error::Chrono(ref e) => fmt::Display::fmt(e, f),
+            Error::InvalidPacket(ref msg) => write!(f, "invalid ilp packet: {}", msg),
+            Error::UnexpectedPacket(ref msg) => write!(f, "unexpected ilp packet: {}", msg),
         }
-        Utf8(err: Utf8Error) {
-            from()
-            description(err.description())
-            cause(err)
+    }
+}
+
+impl error::Error for Error {
+    fn description(&self) -> &str {
+        match *self {
+            Error::Io(ref e) => e.description(),
+            Error::Utf8Error(ref e) => e.description(),
+            Error::FromUtf8Error(ref e) => e.description(),
+            Error::Chrono(ref e) => e.description(),
+            Error::InvalidPacket(..) => "structurally invalid ilp packet",
+            Error::UnexpectedPacket(..) => "unexpected ilp packet",
         }
-        FromUtf8(err: FromUtf8Error) {
-            from()
-            description(err.description())
-            cause(err)
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        match *self {
+            Error::Io(ref e) => Some(e),
+            Error::Utf8Error(ref e) => Some(e),
+            Error::FromUtf8Error(ref e) => Some(e),
+            Error::Chrono(ref e) => Some(e),
+            Error::InvalidPacket(..) | Error::UnexpectedPacket(..) => None,
         }
-        Chrono(err: chrono::ParseError) {
-            from()
-            description(err.description())
-            cause(err)
-        }
-        WrongType(descr: String) {
-            description(descr)
-            display("Wrong Type {}", descr)
-        }
-        InvalidPacket(descr: String) {
-            description(descr)
-            display("Invalid Packet {}", descr)
-        }
-        Other(err: Box<std::error::Error>) {
-            cause(&**err)
-            description(err.description())
-            display("Error {}", err.description())
-        }
+    }
+}
+
+#[doc(hidden)]
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Error {
+        Error::Io(e)
+    }
+}
+
+#[doc(hidden)]
+impl From<str::Utf8Error> for Error {
+    fn from(e: str::Utf8Error) -> Error {
+        Error::Utf8Error(e)
+    }
+}
+
+#[doc(hidden)]
+impl From<string::FromUtf8Error> for Error {
+    fn from(e: string::FromUtf8Error) -> Error {
+        Error::FromUtf8Error(e)
+    }
+}
+
+#[doc(hidden)]
+impl From<chrono::ParseError> for Error {
+    fn from(e: chrono::ParseError) -> Error {
+        Error::Chrono(e)
     }
 }
