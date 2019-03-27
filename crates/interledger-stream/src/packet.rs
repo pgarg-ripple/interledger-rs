@@ -1,11 +1,15 @@
+use super::Error;
+
 use super::crypto::{decrypt, encrypt};
 use byteorder::ReadBytesExt;
 use bytes::{BufMut, BytesMut};
+
+use std::{fmt, str};
+
 use interledger_packet::{
     oer::{BufOerExt, MutBufOerExt},
-    PacketType as IlpPacketType, ParseError,
+    PacketType as IlpPacketType,
 };
-use std::{fmt, str};
 
 const STREAM_VERSION: u8 = 1;
 
@@ -112,22 +116,19 @@ pub struct StreamPacket {
 }
 
 impl StreamPacket {
-    pub fn from_encrypted(shared_secret: &[u8], ciphertext: BytesMut) -> Result<Self, ParseError> {
+    pub fn from_encrypted(shared_secret: &[u8], ciphertext: BytesMut) -> Result<Self, Error> {
         // TODO handle decryption failure
         let decrypted = decrypt(shared_secret, ciphertext)
-            .map_err(|_err| ParseError::InvalidPacket(String::from("Unable to decrypt packet")))?;
+            .map_err(|_err| Error::InvalidPacket(String::from("Unable to decrypt packet")))?;
         StreamPacket::from_bytes_unencrypted(decrypted)
     }
 
-    fn from_bytes_unencrypted(buffer_unencrypted: BytesMut) -> Result<Self, ParseError> {
+    fn from_bytes_unencrypted(buffer_unencrypted: BytesMut) -> Result<Self, Error> {
         // TODO don't copy the whole packet again
         let mut reader = &buffer_unencrypted[..];
         let version = reader.read_u8()?;
         if version != STREAM_VERSION {
-            return Err(ParseError::InvalidPacket(format!(
-                "Unsupported STREAM version: {}",
-                version
-            )));
+            return Err(Error::InvalidPacket(format!("unsupported STREAM version: {}", version)));
         }
         let ilp_packet_type = IlpPacketType::try_from(reader.read_u8()?)?;
         let sequence = reader.read_var_uint()?;
@@ -152,9 +153,7 @@ impl StreamPacket {
                 frames_offset,
             })
         } else {
-            Err(ParseError::InvalidPacket(
-                "Incorrect number of frames or unable to parse all frames".to_string(),
-            ))
+            Err(Error::InvalidPacket(format!("incorrect number of frames or unable to parse all frames")))
         }
     }
 
@@ -199,7 +198,7 @@ pub struct FrameIterator<'a> {
 }
 
 impl<'a> FrameIterator<'a> {
-    fn try_read_next_frame(&mut self) -> Result<Frame<'a>, ParseError> {
+    fn try_read_next_frame(&mut self) -> Result<Frame<'a>, Error> {
         let frame_type = self.buffer.read_u8()?;
         let contents: &'a [u8] = self.buffer.read_var_octet_string()?;
         let frame: Frame<'a> = match FrameType::from(frame_type) {
@@ -404,7 +403,7 @@ impl From<u8> for ErrorCode {
 pub trait SerializableFrame<'a>: Sized {
     fn put_contents(&self, buf: &mut impl MutBufOerExt) -> ();
 
-    fn read_contents(reader: &'a [u8]) -> Result<Self, ParseError>;
+    fn read_contents(reader: &'a [u8]) -> Result<Self, Error>;
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -414,7 +413,7 @@ pub struct ConnectionCloseFrame<'a> {
 }
 
 impl<'a> SerializableFrame<'a> for ConnectionCloseFrame<'a> {
-    fn read_contents(mut reader: &'a [u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &'a [u8]) -> Result<Self, Error> {
         let code = ErrorCode::from(reader.read_u8()?);
         let message_bytes = reader.read_var_octet_string()?;
         let message = str::from_utf8(message_bytes)?;
@@ -434,7 +433,7 @@ pub struct ConnectionNewAddressFrame<'a> {
 }
 
 impl<'a> SerializableFrame<'a> for ConnectionNewAddressFrame<'a> {
-    fn read_contents(mut reader: &'a [u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &'a [u8]) -> Result<Self, Error> {
         let source_account = reader.read_var_octet_string()?;
 
         Ok(ConnectionNewAddressFrame { source_account })
@@ -462,7 +461,7 @@ pub struct ConnectionAssetDetailsFrame<'a> {
 }
 
 impl<'a> SerializableFrame<'a> for ConnectionAssetDetailsFrame<'a> {
-    fn read_contents(mut reader: &'a [u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &'a [u8]) -> Result<Self, Error> {
         let source_asset_code = str::from_utf8(reader.read_var_octet_string()?)?;
         let source_asset_scale = reader.read_u8()?;
 
@@ -484,7 +483,7 @@ pub struct ConnectionMaxDataFrame {
 }
 
 impl<'a> SerializableFrame<'a> for ConnectionMaxDataFrame {
-    fn read_contents(mut reader: &[u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &[u8]) -> Result<Self, Error> {
         let max_offset = reader.read_var_uint()?;
 
         Ok(ConnectionMaxDataFrame { max_offset })
@@ -501,7 +500,7 @@ pub struct ConnectionDataBlockedFrame {
 }
 
 impl<'a> SerializableFrame<'a> for ConnectionDataBlockedFrame {
-    fn read_contents(mut reader: &[u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &[u8]) -> Result<Self, Error> {
         let max_offset = reader.read_var_uint()?;
 
         Ok(ConnectionDataBlockedFrame { max_offset })
@@ -518,7 +517,7 @@ pub struct ConnectionMaxStreamIdFrame {
 }
 
 impl<'a> SerializableFrame<'a> for ConnectionMaxStreamIdFrame {
-    fn read_contents(mut reader: &[u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &[u8]) -> Result<Self, Error> {
         let max_stream_id = reader.read_var_uint()?;
 
         Ok(ConnectionMaxStreamIdFrame { max_stream_id })
@@ -535,7 +534,7 @@ pub struct ConnectionStreamIdBlockedFrame {
 }
 
 impl<'a> SerializableFrame<'a> for ConnectionStreamIdBlockedFrame {
-    fn read_contents(mut reader: &[u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &[u8]) -> Result<Self, Error> {
         let max_stream_id = reader.read_var_uint()?;
 
         Ok(ConnectionStreamIdBlockedFrame { max_stream_id })
@@ -554,7 +553,7 @@ pub struct StreamCloseFrame<'a> {
 }
 
 impl<'a> SerializableFrame<'a> for StreamCloseFrame<'a> {
-    fn read_contents(mut reader: &'a [u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &'a [u8]) -> Result<Self, Error> {
         let stream_id = reader.read_var_uint()?;
         let code = ErrorCode::from(reader.read_u8()?);
         let message_bytes = reader.read_var_octet_string()?;
@@ -581,7 +580,7 @@ pub struct StreamMoneyFrame {
 }
 
 impl<'a> SerializableFrame<'a> for StreamMoneyFrame {
-    fn read_contents(mut reader: &[u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &[u8]) -> Result<Self, Error> {
         let stream_id = reader.read_var_uint()?;
         let shares = reader.read_var_uint()?;
 
@@ -602,7 +601,7 @@ pub struct StreamMaxMoneyFrame {
 }
 
 impl<'a> SerializableFrame<'a> for StreamMaxMoneyFrame {
-    fn read_contents(mut reader: &[u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &[u8]) -> Result<Self, Error> {
         let stream_id = reader.read_var_uint()?;
         let receive_max = reader.read_var_uint()?;
         let total_received = reader.read_var_uint()?;
@@ -629,7 +628,7 @@ pub struct StreamMoneyBlockedFrame {
 }
 
 impl<'a> SerializableFrame<'a> for StreamMoneyBlockedFrame {
-    fn read_contents(mut reader: &[u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &[u8]) -> Result<Self, Error> {
         let stream_id = reader.read_var_uint()?;
         let send_max = reader.read_var_uint()?;
         let total_sent = reader.read_var_uint()?;
@@ -656,7 +655,7 @@ pub struct StreamDataFrame<'a> {
 }
 
 impl<'a> SerializableFrame<'a> for StreamDataFrame<'a> {
-    fn read_contents(mut reader: &'a [u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &'a [u8]) -> Result<Self, Error> {
         let stream_id = reader.read_var_uint()?;
         let offset = reader.read_var_uint()?;
         let data = reader.read_var_octet_string()?;
@@ -682,7 +681,7 @@ pub struct StreamMaxDataFrame {
 }
 
 impl<'a> SerializableFrame<'a> for StreamMaxDataFrame {
-    fn read_contents(mut reader: &[u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &[u8]) -> Result<Self, Error> {
         let stream_id = reader.read_var_uint()?;
         let max_offset = reader.read_var_uint()?;
 
@@ -705,7 +704,7 @@ pub struct StreamDataBlockedFrame {
 }
 
 impl<'a> SerializableFrame<'a> for StreamDataBlockedFrame {
-    fn read_contents(mut reader: &[u8]) -> Result<Self, ParseError> {
+    fn read_contents(mut reader: &[u8]) -> Result<Self, Error> {
         let stream_id = reader.read_var_uint()?;
         let max_offset = reader.read_var_uint()?;
 

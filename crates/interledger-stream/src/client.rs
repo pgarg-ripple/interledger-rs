@@ -1,6 +1,6 @@
 use super::congestion::CongestionController;
 use super::crypto::*;
-use super::error::Error;
+use super::errors::Error;
 use super::packet::*;
 use bytes::Bytes;
 use futures::{Async, Future, Poll};
