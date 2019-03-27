@@ -2,7 +2,7 @@ use byteorder::ReadBytesExt;
 use bytes::{BufMut, Bytes, BytesMut};
 use interledger_packet::{
     oer::{predict_var_octet_string, BufOerExt, MutBufOerExt},
-    Fulfill, FulfillBuilder, ParseError, Prepare, PrepareBuilder,
+    Fulfill, FulfillBuilder, Error, Prepare, PrepareBuilder,
 };
 use std::{
     fmt, str,
@@ -76,7 +76,7 @@ impl From<IldcpResponse> for Fulfill {
 }
 
 impl IldcpResponse {
-    pub fn try_from(buffer: Bytes) -> Result<Self, ParseError> {
+    pub fn try_from(buffer: Bytes) -> Result<Self, Error> {
         let mut reader = &buffer[..];
         let buffer_len = reader.len();
 
