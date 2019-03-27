@@ -6,8 +6,6 @@
 //! Because this protocol uses WebSockets, only one party needs to have a publicly-accessible HTTPS
 //! endpoint but both sides can send and receive ILP packets.
 
-#[macro_use]
-extern crate quick_error;
 #[cfg(test)]
 #[macro_use]
 extern crate lazy_static;
@@ -28,6 +26,7 @@ mod service;
 pub use self::client::{connect_client, parse_btp_url};
 pub use self::server::{create_open_signup_server, create_server};
 pub use self::service::{BtpOutgoingService, BtpService};
+pub use self::errors::Error;
 
 pub trait BtpAccount: Account {
     fn get_btp_uri(&self) -> Option<&Url>;

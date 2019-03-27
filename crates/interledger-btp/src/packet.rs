@@ -1,4 +1,4 @@
-use super::errors::ParseError;
+use super::errors::Error;
 use super::oer::{MutBufOerExt, ReadOerExt};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::BufMut;
@@ -12,7 +12,7 @@ use std::str;
 static GENERALIZED_TIME_FORMAT: &'static str = "%Y%m%d%H%M%S%.3fZ";
 
 pub trait Serializable<T> {
-    fn from_bytes(bytes: &[u8]) -> Result<T, ParseError>;
+    fn from_bytes(bytes: &[u8]) -> Result<T, Error>;
 
     fn to_bytes(&self) -> Vec<u8>;
 }
@@ -44,15 +44,12 @@ pub enum BtpPacket {
 }
 
 impl Serializable<BtpPacket> for BtpPacket {
-    fn from_bytes(bytes: &[u8]) -> Result<BtpPacket, ParseError> {
+    fn from_bytes(bytes: &[u8]) -> Result<BtpPacket, Error> {
         match PacketType::from(bytes[0]) {
             PacketType::Message => Ok(BtpPacket::Message(BtpMessage::from_bytes(bytes)?)),
             PacketType::Response => Ok(BtpPacket::Response(BtpResponse::from_bytes(bytes)?)),
             PacketType::Error => Ok(BtpPacket::Error(BtpError::from_bytes(bytes)?)),
-            PacketType::Unknown => Err(ParseError::InvalidPacket(format!(
-                "Unknown packet type: {}",
-                bytes[0]
-            ))),
+            PacketType::Unknown => Err(Error::InvalidPacket(format!("unknown packet type {}", bytes[0]))),
         }
     }
 
@@ -87,7 +84,8 @@ pub struct ProtocolData {
     pub content_type: ContentType,
     pub data: Vec<u8>,
 }
-fn read_protocol_data<T>(reader: &mut T) -> Result<Vec<ProtocolData>, ParseError>
+
+fn read_protocol_data<T>(reader: &mut T) -> Result<Vec<ProtocolData>, Error>
 where
     T: ReadOerExt,
 {
@@ -128,16 +126,19 @@ pub struct BtpMessage {
     pub protocol_data: Vec<ProtocolData>,
 }
 impl Serializable<BtpMessage> for BtpMessage {
-    fn from_bytes(bytes: &[u8]) -> Result<BtpMessage, ParseError> {
+    fn from_bytes(bytes: &[u8]) -> Result<BtpMessage, Error> {
         let mut reader = Cursor::new(bytes);
         let packet_type = reader.read_u8()?;
+
+        // Packet Type Validation
         if PacketType::from(packet_type) != PacketType::Message {
-            return Err(ParseError::InvalidPacket(format!(
-                "Cannot parse Message from packet of type {}, expected type {}",
+            return Err(Error::InvalidPacket(format!(
+                "invalid type {}, expected type {}",
                 packet_type,
                 PacketType::Message as u8
             )));
         }
+
         let request_id = reader.read_u32::<BigEndian>()?;
         let mut contents = Cursor::new(reader.read_var_octet_string()?);
         let protocol_data = read_protocol_data(&mut contents)?;
@@ -165,11 +166,11 @@ pub struct BtpResponse {
     pub protocol_data: Vec<ProtocolData>,
 }
 impl Serializable<BtpResponse> for BtpResponse {
-    fn from_bytes(bytes: &[u8]) -> Result<BtpResponse, ParseError> {
+    fn from_bytes(bytes: &[u8]) -> Result<BtpResponse, Error> {
         let mut reader = Cursor::new(bytes);
         let packet_type = reader.read_u8()?;
         if PacketType::from(packet_type) != PacketType::Response {
-            return Err(ParseError::InvalidPacket(format!(
+            return Err(Error::InvalidPacket(format!(
                 "Cannot parse Response from packet of type {}, expected type {}",
                 packet_type,
                 PacketType::Response as u8
@@ -205,11 +206,11 @@ pub struct BtpError {
     pub protocol_data: Vec<ProtocolData>,
 }
 impl Serializable<BtpError> for BtpError {
-    fn from_bytes(bytes: &[u8]) -> Result<BtpError, ParseError> {
+    fn from_bytes(bytes: &[u8]) -> Result<BtpError, Error> {
         let mut reader = Cursor::new(bytes);
         let packet_type = reader.read_u8()?;
         if PacketType::from(packet_type) != PacketType::Error {
-            return Err(ParseError::InvalidPacket(format!(
+            return Err(Error::InvalidPacket(format!(
                 "Cannot parse Error from packet of type {}, expected type {}",
                 packet_type,
                 PacketType::Error as u8
