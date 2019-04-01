@@ -2,6 +2,7 @@
 
 use std::time::SystemTime;
 
+use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
 
@@ -23,6 +24,9 @@ lazy_static! {
             .unwrap()
             .with_timezone(&Utc)
             .into();
+
+    // This is a buffer of data too large to be used as the data of an ILP packet.
+    pub static ref HUGE_DATA: BytesMut = make_zero_buffer(1 << 15);
 }
 
 pub static PREPARE_BYTES: &'static [u8] = b"\
@@ -93,6 +97,8 @@ lazy_static! {
         triggered_by: Addr::new(b"example.connector"),
         data: &DATA,
     };
+
+    pub static ref HUGE_MESSAGE: BytesMut = make_zero_buffer(1 << 13);
 }
 
 pub static REJECT_BYTES: &'static [u8] = b"\
@@ -132,3 +138,11 @@ pub static DATA: &'static [u8] = b"\
     \x0c\x26\xd3\xb5\xf4\xad\x87\x9d\x84\x94\xbb\x3a\xeb\xfe\x61\x2e\xc5\x40\
     \x41\xe4\xa3\x80\xf0\
 ";
+
+fn make_zero_buffer(size: usize) -> BytesMut {
+    let mut buffer = BytesMut::with_capacity(size);
+    for _i in 0..size {
+        buffer.put(b'.');
+    }
+    buffer
+}

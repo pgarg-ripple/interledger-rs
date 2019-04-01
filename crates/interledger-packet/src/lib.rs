@@ -1,6 +1,12 @@
 //! # interledger-packet
 //!
 //! Interledger packet serialization/deserialization.
+//!
+//! # References
+//!
+//!   * <https://github.com/interledger/rfcs/blob/master/0027-interledger-protocol-4/0027-interledger-protocol-4.md#packet-format>
+//!   * <https://github.com/interledger/rfcs/blob/master/asn1/InterledgerProtocol.asn>
+//!
 
 mod address;
 mod error;

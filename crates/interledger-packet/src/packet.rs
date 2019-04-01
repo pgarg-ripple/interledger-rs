@@ -17,6 +17,9 @@ const CONDITION_LEN: usize = 32;
 const FULFILLMENT_LEN: usize = 32;
 const ERROR_CODE_LEN: usize = 3;
 
+const MAX_MESSAGE_LEN: usize = 8191;
+const MAX_DATA_LEN: usize = 32767;
+
 static INTERLEDGER_TIMESTAMP_FORMAT: &'static str = "%Y%m%d%H%M%S%3f";
 
 // TODO TryFrom([u8])
@@ -131,7 +134,10 @@ impl Prepare {
 
         // Skip the data.
         let data_offset = content_offset + content_len - content.len();
-        content.skip_var_octet_string()?;
+        let data_len = content.read_var_octet_string()?.len();
+        if MAX_DATA_LEN < data_len {
+            return Err(ParseError::InvalidPacket("data too large".to_owned()));
+        }
 
         Ok(Prepare {
             buffer,
@@ -285,7 +291,10 @@ impl Fulfill {
         let (content_offset, mut content) = deserialize_envelope(PacketType::Fulfill, &buffer)?;
 
         content.skip(FULFILLMENT_LEN)?;
-        content.skip_var_octet_string()?;
+        let data_len = content.read_var_octet_string()?.len();
+        if MAX_DATA_LEN < data_len {
+            return Err(ParseError::InvalidPacket("data too large".to_owned()));
+        }
 
         Ok(Fulfill {
             buffer,
@@ -387,10 +396,16 @@ impl Reject {
         Addr::try_from(content.read_var_octet_string()?)?;
 
         let message_offset = content_offset + content_len - content.len();
-        content.skip_var_octet_string()?;
+        let message_len = content.read_var_octet_string()?.len();
+        if MAX_MESSAGE_LEN < message_len {
+            return Err(ParseError::InvalidPacket("message too large".to_owned()));
+        }
 
         let data_offset = content_offset + content_len - content.len();
-        content.skip_var_octet_string()?;
+        let data_len = content.read_var_octet_string()?.len();
+        if MAX_DATA_LEN < data_len {
+            return Err(ParseError::InvalidPacket("data too large".to_owned()));
+        }
 
         Ok(Reject {
             buffer,
@@ -651,6 +666,13 @@ mod test_prepare {
         );
         assert_eq!(with_junk_data.destination(), PREPARE.destination());
         assert_eq!(with_junk_data.data(), fixtures::DATA);
+
+        // A packet with data that is too large.
+        assert!(Prepare::try_from({
+            let mut with_huge_data = PREPARE_BUILDER.clone();
+            with_huge_data.data = &fixtures::HUGE_DATA;
+            BytesMut::from(with_huge_data.build())
+        }).is_err());
     }
 
     #[test]
@@ -795,6 +817,13 @@ mod test_reject {
         assert_eq!(with_junk_data.message(), REJECT_BUILDER.message);
         assert_eq!(with_junk_data.triggered_by(), REJECT_BUILDER.triggered_by);
         assert_eq!(with_junk_data.data(), fixtures::DATA);
+
+        // A packet with a message that is too large.
+        assert!(Reject::try_from({
+            let mut reject = REJECT_BUILDER.clone();
+            reject.message = &fixtures::HUGE_MESSAGE;
+            BytesMut::from(reject.build())
+        }).is_err());
     }
 
     #[test]
