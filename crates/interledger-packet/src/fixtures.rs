@@ -94,7 +94,7 @@ lazy_static! {
     pub static ref REJECT_BUILDER: RejectBuilder<'static> = RejectBuilder {
         code: ErrorCode::F99_APPLICATION_ERROR,
         message: b"Some error",
-        triggered_by: Addr::new(b"example.connector"),
+        triggered_by: Some(Addr::new(b"example.connector")),
         data: &DATA,
     };
 

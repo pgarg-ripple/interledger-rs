@@ -379,7 +379,7 @@ pub struct Reject {
 pub struct RejectBuilder<'a> {
     pub code: ErrorCode,
     pub message: &'a [u8],
-    pub triggered_by: Addr<'a>,
+    pub triggered_by: Option<Addr<'a>>,
     pub data: &'a [u8],
 }
 
@@ -422,12 +422,16 @@ impl Reject {
     }
 
     #[inline]
-    pub fn triggered_by(&self) -> Addr {
+    pub fn triggered_by(&self) -> Option<Addr> {
         let address_bytes = (&self.buffer[self.triggered_by_offset..])
             .peek_var_octet_string()
             .unwrap();
-        // TODO should this be new_unchecked?
-        Addr::try_from(address_bytes).unwrap()
+        if address_bytes.len() == 0 {
+            None
+        } else {
+            // TODO should this be new_unchecked?
+            Some(Addr::try_from(address_bytes).unwrap())
+        }
     }
 
     #[inline]
@@ -478,7 +482,7 @@ impl fmt::Debug for Reject {
 
 impl<'a> RejectBuilder<'a> {
     pub fn build(&self) -> Reject {
-        let triggered_by_size = oer::predict_var_octet_string(self.triggered_by.len());
+        let triggered_by_size = oer::predict_var_octet_string(self.triggered_by_len());
         let message_size = oer::predict_var_octet_string(self.message.len());
         let data_size = oer::predict_var_octet_string(self.data.len());
         let content_len = ERROR_CODE_LEN + triggered_by_size + message_size + data_size;
@@ -488,7 +492,12 @@ impl<'a> RejectBuilder<'a> {
         buffer.put_u8(PacketType::Reject as u8);
         buffer.put_var_octet_string_length(content_len);
         buffer.put_slice(&<[u8; 3]>::from(self.code)[..]);
-        buffer.put_var_octet_string(self.triggered_by.as_ref());
+        //buffer.put_var_octet_string(self.triggered_by.as_ref());
+        if let Some(triggered_by) = self.triggered_by {
+            buffer.put_var_octet_string(triggered_by.as_ref());
+        } else {
+            buffer.put_var_octet_string(&[][..]);
+        }
         buffer.put_var_octet_string(self.message);
         buffer.put_var_octet_string(self.data);
         Reject {
@@ -497,6 +506,14 @@ impl<'a> RejectBuilder<'a> {
             triggered_by_offset: buf_size - data_size - message_size - triggered_by_size,
             message_offset: buf_size - data_size - message_size,
             data_offset: buf_size - data_size,
+        }
+    }
+
+    fn triggered_by_len(&self) -> usize {
+        if let Some(triggered_by) = self.triggered_by {
+            triggered_by.len()
+        } else {
+            0
         }
     }
 }
@@ -844,6 +861,14 @@ mod test_reject {
     #[test]
     fn test_triggered_by() {
         assert_eq!(REJECT.triggered_by(), REJECT_BUILDER.triggered_by);
+    }
+
+    #[test]
+    fn test_triggered_by_empty() {
+        let mut builder = REJECT_BUILDER.clone();
+        builder.triggered_by = None;
+        let reject = builder.build();
+        assert_eq!(reject.triggered_by(), None);
     }
 
     #[test]
