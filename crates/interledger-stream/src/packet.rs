@@ -291,7 +291,7 @@ impl<'a> fmt::Debug for FrameIterator<'a> {
 #[derive(PartialEq, Clone)]
 pub enum Frame<'a> {
     ConnectionClose(ConnectionCloseFrame<'a>),
-    ConnectionNewAddress(ConnectionNewAddressFrame),
+    ConnectionNewAddress(ConnectionNewAddressFrame<'a>),
     ConnectionAssetDetails(ConnectionAssetDetailsFrame<'a>),
     ConnectionMaxData(ConnectionMaxDataFrame),
     ConnectionDataBlocked(ConnectionDataBlockedFrame),
@@ -429,16 +429,16 @@ impl<'a> SerializableFrame<'a> for ConnectionCloseFrame<'a> {
 }
 
 #[derive(PartialEq, Clone)]
-pub struct ConnectionNewAddressFrame {
-    pub source_account: Address,
+pub struct ConnectionNewAddressFrame<'a> {
+    pub source_account: &'a Address,
 }
 
-impl<'a> SerializableFrame<'a> for ConnectionNewAddressFrame {
+impl<'a> SerializableFrame<'a> for ConnectionNewAddressFrame<'a> {
     fn read_contents(mut reader: &'a [u8]) -> Result<Self, ParseError> {
         let source_account = reader.read_var_octet_string()?;
         let source_account = Address::try_from(source_account)?;
 
-        Ok(ConnectionNewAddressFrame { source_account })
+        Ok(ConnectionNewAddressFrame { source_account: &source_account })
     }
 
     fn put_contents(&self, buf: &mut impl MutBufOerExt) {
@@ -447,7 +447,7 @@ impl<'a> SerializableFrame<'a> for ConnectionNewAddressFrame {
     }
 }
 
-impl<'a> fmt::Debug for ConnectionNewAddressFrame {
+impl<'a> fmt::Debug for ConnectionNewAddressFrame<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,

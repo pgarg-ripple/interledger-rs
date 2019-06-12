@@ -114,8 +114,7 @@ where
             })];
             if self.should_send_source_account {
                 frames.push(Frame::ConnectionNewAddress(ConnectionNewAddressFrame {
-                    // How can we make this take a reference?
-                    source_account: self.source_account.clone(),
+                    source_account: &self.source_account,
                 }));
             }
             let stream_packet = StreamPacketBuilder {
