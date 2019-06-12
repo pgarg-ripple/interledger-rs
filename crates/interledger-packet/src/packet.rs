@@ -426,7 +426,7 @@ impl Reject {
         let address_bytes = (&self.buffer[self.triggered_by_offset..])
             .peek_var_octet_string()
             .unwrap();
-        if address_bytes.len() == 0 {
+        if address_bytes.is_empty() {
             None
         } else {
             // TODO should this be new_unchecked?
