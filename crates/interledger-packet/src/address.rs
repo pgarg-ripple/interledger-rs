@@ -50,20 +50,20 @@ impl fmt::Display for AddressError {
 
 /// An ILP address backed by `Bytes`.
 #[derive(Clone, Eq, Hash, PartialEq)]
-pub struct Address(Bytes);
+pub struct Address<'a>(&'a Bytes);
 
-impl FromStr for Address {
+impl<'a> FromStr for Address<'a> {
     type Err = ParseError;
 
     fn from_str(src: &str) -> Result<Self, Self::Err> {
-        Address::try_from(Bytes::from(src))
+        Address::try_from(&Bytes::from(src))
     }
 }
 
-impl TryFrom<Bytes> for Address {
+impl<'a> TryFrom<&'a Bytes> for Address<'a> {
     type Error = ParseError;
 
-    fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
+    fn try_from(bytes: &'a Bytes) -> Result<Address<'a>, Self::Error> {
         // https://interledger.org/rfcs/0015-ilp-addresses/#address-requirements
         if bytes.len() > MAX_ADDRESS_LENGTH {
             return Err(ParseError::InvalidAddress(AddressError::InvalidLength(
@@ -79,15 +79,34 @@ impl TryFrom<Bytes> for Address {
     }
 }
 
-impl TryFrom<&[u8]> for Address {
+// impl<'a> TryFrom<Bytes> for Address<'a> {
+//     type Error = ParseError;
+// 
+//     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
+//         // https://interledger.org/rfcs/0015-ilp-addresses/#address-requirements
+//         if bytes.len() > MAX_ADDRESS_LENGTH {
+//             return Err(ParseError::InvalidAddress(AddressError::InvalidLength(
+//                 bytes.len(),
+//             )));
+//         }
+// 
+//         if ADDRESS_PATTERN.is_match(str::from_utf8(&bytes)?) {
+//             Ok(Address(&bytes))
+//         } else {
+//             Err(ParseError::InvalidAddress(AddressError::InvalidFormat))
+//         }
+//     }
+// }
+
+impl<'a> TryFrom<&[u8]> for Address<'a> {
     type Error = ParseError;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        Self::try_from(Bytes::from(bytes))
+        Self::try_from(&Bytes::from(bytes))
     }
 }
 
-impl std::ops::Deref for Address {
+impl <'a> std::ops::Deref for Address<'a> {
     type Target = str;
 
     fn deref(&self) -> &str {
@@ -95,21 +114,21 @@ impl std::ops::Deref for Address {
     }
 }
 
-impl AsRef<[u8]> for Address {
+impl <'a> AsRef<[u8]> for Address<'a> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
     }
 }
 
-impl AsRef<Bytes> for Address {
+impl <'a> AsRef<Bytes> for Address<'a> {
     #[inline]
     fn as_ref(&self) -> &Bytes {
         &self.0
     }
 }
 
-impl fmt::Debug for Address {
+impl <'a> fmt::Debug for Address<'a> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter
             .debug_tuple("Address")
@@ -118,13 +137,13 @@ impl fmt::Debug for Address {
     }
 }
 
-impl fmt::Display for Address {
+impl <'a> fmt::Display for Address<'a> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str(self)
     }
 }
 
-impl Address {
+impl<'a> Address<'a> {
     /// Returns the length of the ILP Address.
     #[inline]
     pub fn len(&self) -> usize {
@@ -142,9 +161,9 @@ impl Address {
     ///
     /// The given bytes must be a valid ILP address.
     #[inline]
-    pub unsafe fn new_unchecked(bytes: Bytes) -> Self {
+    pub unsafe fn new_unchecked(bytes: &'a Bytes) -> Self {
         debug_assert!(Address::try_from(bytes.as_ref()).is_ok());
-        Address(bytes)
+        Address(&bytes)
     }
 
     /// ```text
@@ -179,11 +198,11 @@ impl Address {
         new_address.put(b'.');
         new_address.put_slice(suffix);
 
-        Address::try_from(new_address.freeze())
+        Address::try_from(&new_address.freeze())
     }
 }
 
-impl<'a> PartialEq<[u8]> for Address {
+impl<'a> PartialEq<[u8]> for Address<'a> {
     fn eq(&self, other: &[u8]) -> bool {
         self.0 == other
     }

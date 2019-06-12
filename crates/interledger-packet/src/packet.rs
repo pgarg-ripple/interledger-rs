@@ -127,7 +127,7 @@ pub struct PrepareBuilder<'a> {
     pub amount: u64,
     pub expires_at: SystemTime,
     pub execution_condition: &'a [u8; 32],
-    pub destination: Address,
+    pub destination: Address<'a>,
     pub data: &'a [u8],
 }
 
@@ -208,7 +208,7 @@ impl Prepare {
     pub fn destination(&self) -> Address {
         let offset = self.content_offset + AMOUNT_LEN + EXPIRY_LEN + CONDITION_LEN;
         let addr_bytes = (&self.buffer[offset..]).peek_var_octet_string().unwrap();
-        unsafe { Address::new_unchecked(Bytes::from(addr_bytes)) }
+        unsafe { Address::new_unchecked(&Bytes::from(addr_bytes)) }
     }
 
     #[inline]
@@ -396,7 +396,7 @@ pub struct Reject {
 pub struct RejectBuilder<'a> {
     pub code: ErrorCode,
     pub message: &'a [u8],
-    pub triggered_by: Option<&'a Address>,
+    pub triggered_by: Option<&'a Address<'a>>,
     pub data: &'a [u8],
 }
 
@@ -437,7 +437,7 @@ impl Reject {
         let address_bytes = (&self.buffer[self.triggered_by_offset..])
             .peek_var_octet_string()
             .unwrap(); // Can we unwrap safely here?
-        unsafe { Address::new_unchecked(Bytes::from(address_bytes)) }
+        unsafe { Address::new_unchecked(&Bytes::from(address_bytes)) }
     }
 
     #[inline]
