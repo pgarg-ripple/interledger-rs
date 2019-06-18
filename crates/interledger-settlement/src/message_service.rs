@@ -15,7 +15,7 @@ const PEER_FULFILLMENT: [u8; 32] = [0; 32];
 #[derive(Clone)]
 pub struct SettlementMessageService<I, A> {
     ilp_address: Address,
-    eext: I,
+    next: I,
     http_client: Client,
     account_type: PhantomData<A>,
 }
@@ -62,7 +62,7 @@ where
                             .expect("Invalid settlement engine URL")
                             .push("accounts")
                             .push(&id.to_string())
-                            .push("settlement"); // Maybe set the idempotency flag here in the headers
+                            .push("messages"); // Maybe set the idempotency flag here in the headers
                         return Box::new(self.http_client.post(settlement_engine_url)
                         .json(&message)
                         .send()
@@ -359,7 +359,7 @@ mod tests {
             TestAccount::new(0, "http://localhost:1234", "peer.settle.xrp-ledger");
         static ref SERVICE_ADDRESS: Address = Address::from_str("example.connector").unwrap();
         static ref SETTLEMENT_API: Matcher =
-            Matcher::Regex(r"^/accounts/\d*/settlement$".to_string());
+            Matcher::Regex(r"^/accounts/\d*/messages$".to_string());
     }
 
     fn mock_settle(status_code: usize) -> mockito::Mock {
