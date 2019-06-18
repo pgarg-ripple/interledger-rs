@@ -5,6 +5,7 @@ use futures::{
 };
 use interledger_packet::{Address, ErrorCode, FulfillBuilder, RejectBuilder};
 use interledger_service::{BoxedIlpFuture, IncomingRequest, IncomingService};
+use parking_lot::Mutex;
 use reqwest::r#async::Client;
 use serde_json::{self, Value};
 use std::marker::PhantomData;
@@ -14,7 +15,7 @@ const PEER_FULFILLMENT: [u8; 32] = [0; 32];
 #[derive(Clone)]
 pub struct SettlementMessageService<I, A> {
     ilp_address: Address,
-    next: I,
+    eext: I,
     http_client: Client,
     account_type: PhantomData<A>,
 }
@@ -48,19 +49,20 @@ where
         if let Some(settlement_engine_details) = request.from.settlement_engine_details() {
             if request.prepare.destination() == settlement_engine_details.ilp_address {
                 let ilp_address_clone = self.ilp_address.clone();
+                let engine_address = settlement_engine_details.ilp_address;
                 let mut settlement_engine_url = settlement_engine_details.url;
 
                 match serde_json::from_slice(request.prepare.data()) {
                     Ok(Value::Object(mut message)) => {
-                        message.insert(
-                            "accountId".to_string(),
-                            Value::String(request.from.id().to_string()),
-                        );
+                        let id = request.from.id();
+                        message.insert("accountId".to_string(), Value::String(id.to_string()));
                         // TODO add auth
                         settlement_engine_url
                             .path_segments_mut()
                             .expect("Invalid settlement engine URL")
-                            .push("receiveMessage"); // Maybe set the idempotency flag here in the headers
+                            .push("accounts")
+                            .push(&id.to_string())
+                            .push("settlement"); // Maybe set the idempotency flag here in the headers
                         return Box::new(self.http_client.post(settlement_engine_url)
                         .json(&message)
                         .send()
@@ -77,13 +79,14 @@ where
                             let status = response.status();
                             if status.is_success() {
                                 Either::A(response.into_body().concat2().map_err(move |err| {
+                                    // When can this case be reached?  Unclear when `concat2` fails
                                     error!("Error concatenating settlement engine response body: {:?}", err);
                                     RejectBuilder {
-                                    code: ErrorCode::T00_INTERNAL_ERROR,
-                                    message: b"Error getting settlement engine response",
-                                    data: &[],
-                                    triggered_by: Some(&ilp_address),
-                                }.build()
+                                        code: ErrorCode::T00_INTERNAL_ERROR,
+                                        message: b"Error getting settlement engine response",
+                                        data: &[],
+                                        triggered_by: Some(&engine_address),
+                                    }.build()
                                 })
                                 .and_then(|body| {
                                     Ok(FulfillBuilder {
@@ -102,7 +105,7 @@ where
                                     code,
                                     message: format!("Settlement engine rejected request with error code: {}", response.status()).as_str().as_ref(),
                                     data: &[],
-                                    triggered_by: Some(&ilp_address),
+                                    triggered_by: Some(&engine_address),
                                 }.build()))
                             }
                         }));
@@ -123,7 +126,7 @@ where
                         }
                         .build()));
                     }
-                    _ => {
+                    _ => { // What type of request causes this fallthrough case?
                         error!("Got invalid settlement message from account {} that could not be parsed as a JSON object", request.from.id());
                         return Box::new(err(RejectBuilder {
                             code: ErrorCode::F00_BAD_REQUEST,
@@ -138,7 +141,7 @@ where
                 error!("Got settlement packet from account {} but there is no settlement engine url configured for it", request.from.id());
                 return Box::new(err(RejectBuilder {
                     code: ErrorCode::F02_UNREACHABLE,
-                    message: &[],
+                    message: format!("Got settlement packet from account {} but there is no settlement engine url configured for it", request.from.id()).as_str().as_ref(),
                     data: &[],
                     triggered_by: Some(&ilp_address),
                 }
