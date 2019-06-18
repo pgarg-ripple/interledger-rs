@@ -4,6 +4,8 @@
 extern crate log;
 #[macro_use]
 extern crate tower_web;
+#[macro_use]
+extern crate lazy_static;
 
 use futures::Future;
 use interledger_packet::Address;
