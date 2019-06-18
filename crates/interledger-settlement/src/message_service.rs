@@ -126,7 +126,8 @@ where
                         }
                         .build()));
                     }
-                    _ => { // What type of request causes this fallthrough case?
+                    _ => {
+                        // What type of request causes this fallthrough case?
                         error!("Got invalid settlement message from account {} that could not be parsed as a JSON object", request.from.id());
                         return Box::new(err(RejectBuilder {
                             code: ErrorCode::F00_BAD_REQUEST,
@@ -284,10 +285,7 @@ mod tests {
         m.assert();
         assert_eq!(reject.code(), ErrorCode::F02_UNREACHABLE);
         assert_eq!(reject.triggered_by(), SERVICE_ADDRESS.clone());
-        assert_eq!(
-            reject.message(),
-            "No other incoming handler!".as_bytes(),
-        );
+        assert_eq!(reject.message(), "No other incoming handler!".as_bytes(),);
     }
 
     #[test]
@@ -315,12 +313,16 @@ mod tests {
 
         m.assert();
         assert_eq!(reject.code(), ErrorCode::T00_INTERNAL_ERROR);
-        // The engine rejected the message, not the connector's service, 
+        // The engine rejected the message, not the connector's service,
         // so the triggered by should be the ilp address of th engine - I think.
-        assert_eq!(reject.triggered_by(), destination); 
+        assert_eq!(reject.triggered_by(), destination);
         assert_eq!(
             reject.message(),
-            format!("Settlement engine rejected request with error code: {} {}", error_code, error_str).as_bytes(),
+            format!(
+                "Settlement engine rejected request with error code: {} {}",
+                error_code, error_str
+            )
+            .as_bytes(),
         );
     }
 
@@ -365,7 +367,6 @@ mod tests {
             .with_status(status_code)
             .with_body(BODY)
     }
-
 
     // Futures helper taken from the store_helpers in interledger-store-redis.
     pub fn block_on<F>(f: F) -> Result<F::Item, F::Error>
