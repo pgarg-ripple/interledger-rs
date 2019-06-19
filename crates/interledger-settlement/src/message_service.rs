@@ -49,7 +49,6 @@ where
         if let Some(settlement_engine_details) = request.from.settlement_engine_details() {
             if request.prepare.destination() == settlement_engine_details.ilp_address {
                 let ilp_address_clone = self.ilp_address.clone();
-                let engine_address = settlement_engine_details.ilp_address;
                 let mut settlement_engine_url = settlement_engine_details.url;
 
                 match serde_json::from_slice(request.prepare.data()) {
@@ -85,7 +84,7 @@ where
                                         code: ErrorCode::T00_INTERNAL_ERROR,
                                         message: b"Error getting settlement engine response",
                                         data: &[],
-                                        triggered_by: Some(&engine_address),
+                                        triggered_by: Some(&ilp_address),
                                     }.build()
                                 })
                                 .and_then(|body| {
@@ -105,7 +104,7 @@ where
                                     code,
                                     message: format!("Settlement engine rejected request with error code: {}", response.status()).as_str().as_ref(),
                                     data: &[],
-                                    triggered_by: Some(&engine_address),
+                                    triggered_by: Some(&ilp_address),
                                 }.build()))
                             }
                         }));
@@ -315,7 +314,7 @@ mod tests {
         assert_eq!(reject.code(), ErrorCode::T00_INTERNAL_ERROR);
         // The engine rejected the message, not the connector's service,
         // so the triggered by should be the ilp address of th engine - I think.
-        assert_eq!(reject.triggered_by(), destination);
+        assert_eq!(reject.triggered_by(), SERVICE_ADDRESS.clone());
         assert_eq!(
             reject.message(),
             format!(
