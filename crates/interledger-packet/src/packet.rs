@@ -11,7 +11,6 @@ use chrono::{DateTime, TimeZone, Utc};
 
 use super::oer::{self, BufOerExt, MutBufOerExt};
 use super::{Address, ErrorCode, ParseError};
-use bytes::Bytes;
 use std::convert::TryFrom;
 
 const AMOUNT_LEN: usize = 8;
@@ -20,7 +19,7 @@ const CONDITION_LEN: usize = 32;
 const FULFILLMENT_LEN: usize = 32;
 const ERROR_CODE_LEN: usize = 3;
 
-static INTERLEDGER_TIMESTAMP_FORMAT: &'static str = "%Y%m%d%H%M%S%3f";
+static INTERLEDGER_TIMESTAMP_FORMAT: &str = "%Y%m%d%H%M%S%3f";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
@@ -443,11 +442,11 @@ impl Reject {
     }
 
     #[inline]
-    pub fn triggered_by(&self) -> Address {
-        let address_bytes = (&self.buffer[self.triggered_by_offset..])
-            .peek_var_octet_string()
-            .unwrap(); // Can we unwrap safely here?
-        unsafe { Address::new_unchecked(Bytes::from(address_bytes)) }
+    pub fn triggered_by(&self) -> Option<Address> {
+        match (&self.buffer[self.triggered_by_offset..]).peek_var_octet_string() {
+            Ok(bytes) => Address::try_from(bytes).ok(),
+            Err(_) => None,
+        }
     }
 
     #[inline]
@@ -833,8 +832,8 @@ mod test_reject {
         assert_eq!(with_junk_data.code(), REJECT_BUILDER.code);
         assert_eq!(with_junk_data.message(), REJECT_BUILDER.message);
         assert_eq!(
-            with_junk_data.triggered_by(),
-            *REJECT_BUILDER.triggered_by.unwrap()
+            with_junk_data.triggered_by().as_ref(),
+            REJECT_BUILDER.triggered_by
         );
         assert_eq!(with_junk_data.data(), fixtures::DATA);
     }
@@ -856,7 +855,7 @@ mod test_reject {
 
     #[test]
     fn test_triggered_by() {
-        assert_eq!(REJECT.triggered_by(), *REJECT_BUILDER.triggered_by.unwrap());
+        assert_eq!(REJECT.triggered_by().as_ref(), REJECT_BUILDER.triggered_by);
     }
 
     #[test]
@@ -874,14 +873,14 @@ mod test_reject {
 mod test_max_packet_amount_details {
     use super::*;
 
-    static BYTES: &'static [u8] = b"\
+    static BYTES: &[u8] = b"\
         \x00\x00\x00\x00\x00\x03\x02\x01\
         \x00\x00\x00\x00\x00\x06\x05\x04\
     ";
 
     static DETAILS: MaxPacketAmountDetails = MaxPacketAmountDetails {
-        amount_received: 0x030201,
-        max_amount: 0x060504,
+        amount_received: 0x0003_0201,
+        max_amount: 0x0006_0504,
     };
 
     #[test]
@@ -902,11 +901,11 @@ mod test_max_packet_amount_details {
 
     #[test]
     fn test_amount_received() {
-        assert_eq!(DETAILS.amount_received(), 0x030201);
+        assert_eq!(DETAILS.amount_received(), 0x0003_0201);
     }
 
     #[test]
     fn test_max_amount() {
-        assert_eq!(DETAILS.max_amount(), 0x060504);
+        assert_eq!(DETAILS.max_amount(), 0x0006_0504);
     }
 }

@@ -248,7 +248,6 @@ fn receive_money(
 #[cfg(test)]
 mod connection_generator {
     use super::*;
-    use regex::Regex;
     use std::str::FromStr;
 
     #[test]
@@ -599,7 +598,7 @@ mod stream_receiver_service {
             .wait();
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().triggered_by(),
+            result.unwrap_err().triggered_by().unwrap(),
             Address::from_str("example.other-receiver").unwrap(),
         );
     }

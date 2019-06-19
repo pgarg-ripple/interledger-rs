@@ -32,12 +32,11 @@ pub mod test_helpers {
     use interledger_router::RouterStore;
     use interledger_service::{Account, AccountStore};
     use std::iter::FromIterator;
+    use std::str::FromStr;
 
     lazy_static! {
-        pub static ref EXAMPLE_CONNECTOR: Address =
-            unsafe { Address::new_unchecked(Bytes::from("example.connector")) };
-        pub static ref EXAMPLE_RECEIVER: Address =
-            unsafe { Address::new_unchecked(Bytes::from("example.receiver")) };
+        pub static ref EXAMPLE_CONNECTOR: Address = Address::from_str("example.connector").unwrap();
+        pub static ref EXAMPLE_RECEIVER: Address = Address::from_str("example.receiver").unwrap();
     }
 
     #[derive(Debug, Eq, PartialEq, Clone)]
@@ -81,7 +80,7 @@ pub mod test_helpers {
         fn get_accounts(
             &self,
             _account_ids: Vec<<<Self as AccountStore>::Account as Account>::AccountId>,
-        ) -> Box<Future<Item = Vec<TestAccount>, Error = ()> + Send> {
+        ) -> Box<dyn Future<Item = Vec<TestAccount>, Error = ()> + Send> {
             Box::new(ok(vec![self.route.1.clone()]))
         }
     }

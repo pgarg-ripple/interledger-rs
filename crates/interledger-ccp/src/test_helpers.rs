@@ -31,8 +31,7 @@ lazy_static! {
         receive_routes: false,
         relation: RoutingRelation::Child,
     };
-    pub static ref EXAMPLE_CONNECTOR: Address =
-        unsafe { Address::new_unchecked(Bytes::from("example.connector")) };
+    pub static ref EXAMPLE_CONNECTOR: Address = Address::from_str("example.connector").unwrap();
 }
 
 #[derive(Clone, Debug)]
@@ -113,12 +112,14 @@ impl TestStore {
         configured: HashMap<Bytes, TestAccount>,
     ) -> TestStore {
         TestStore {
-            local: local,
-            configured: configured,
+            local,
+            configured,
             routes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
+
+type RoutingTable<A> = HashMap<Bytes, A>;
 
 impl RouteManagerStore for TestStore {
     type Account = TestAccount;
@@ -126,7 +127,7 @@ impl RouteManagerStore for TestStore {
     fn get_local_and_configured_routes(
         &self,
     ) -> Box<
-        Future<Item = (HashMap<Bytes, TestAccount>, HashMap<Bytes, TestAccount>), Error = ()>
+        dyn Future<Item = (RoutingTable<TestAccount>, RoutingTable<TestAccount>), Error = ()>
             + Send,
     > {
         Box::new(ok((self.local.clone(), self.configured.clone())))
@@ -134,7 +135,7 @@ impl RouteManagerStore for TestStore {
 
     fn get_accounts_to_send_routes_to(
         &self,
-    ) -> Box<Future<Item = Vec<TestAccount>, Error = ()> + Send> {
+    ) -> Box<dyn Future<Item = Vec<TestAccount>, Error = ()> + Send> {
         let mut accounts: Vec<TestAccount> = self
             .local
             .values()
@@ -149,7 +150,7 @@ impl RouteManagerStore for TestStore {
 
     fn get_accounts_to_receive_routes_from(
         &self,
-    ) -> Box<Future<Item = Vec<TestAccount>, Error = ()> + Send> {
+    ) -> Box<dyn Future<Item = Vec<TestAccount>, Error = ()> + Send> {
         let mut accounts: Vec<TestAccount> = self
             .local
             .values()
@@ -165,7 +166,7 @@ impl RouteManagerStore for TestStore {
     fn set_routes(
         &mut self,
         routes: impl IntoIterator<Item = (Bytes, TestAccount)>,
-    ) -> Box<Future<Item = (), Error = ()> + Send> {
+    ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
         *self.routes.lock() = HashMap::from_iter(routes.into_iter());
         Box::new(ok(()))
     }
@@ -205,6 +206,8 @@ pub fn test_service() -> CcpRouteManager<
     .to_service()
 }
 
+type OutgoingRequests = Arc<Mutex<Vec<OutgoingRequest<TestAccount>>>>;
+
 pub fn test_service_with_routes() -> (
     CcpRouteManager<
         impl IncomingService<TestAccount, Future = BoxedIlpFuture> + Clone,
@@ -212,7 +215,7 @@ pub fn test_service_with_routes() -> (
         TestStore,
         TestAccount,
     >,
-    Arc<Mutex<Vec<OutgoingRequest<TestAccount>>>>,
+    OutgoingRequests,
 ) {
     let local_routes = HashMap::from_iter(vec![
         (

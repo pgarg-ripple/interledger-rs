@@ -51,6 +51,7 @@ fn three_nodes() {
         btp_address: ([127, 0, 0, 1], get_open_port(None)).into(),
         http_address: ([127, 0, 0, 1], node1_http).into(),
         secret_seed: cli::random_secret(),
+        route_broadcast_interval: Some(200),
     };
     let node1_clone = node1.clone();
     runtime.spawn(
@@ -88,7 +89,7 @@ fn three_nodes() {
                 asset_scale: 9,
                 btp_incoming_token: None,
                 btp_uri: None,
-                http_endpoint: Some(format!("http://localhost:{}/ilp", node2_http.clone())),
+                http_endpoint: Some(format!("http://localhost:{}/ilp", node2_http)),
                 http_incoming_token: Some("two".to_string()),
                 http_outgoing_token: Some("one".to_string()),
                 max_packet_amount: u64::max_value(),
@@ -116,6 +117,7 @@ fn three_nodes() {
         btp_address: ([127, 0, 0, 1], node2_btp).into(),
         http_address: ([127, 0, 0, 1], node2_http).into(),
         secret_seed: cli::random_secret(),
+        route_broadcast_interval: Some(200),
     };
     runtime.spawn(
         join_all(vec![
@@ -125,7 +127,7 @@ fn three_nodes() {
                 asset_scale: 9,
                 btp_incoming_token: None,
                 btp_uri: None,
-                http_endpoint: Some(format!("http://localhost:{}/ilp", node1_http.clone())),
+                http_endpoint: Some(format!("http://localhost:{}/ilp", node1_http)),
                 http_incoming_token: Some("one".to_string()),
                 http_outgoing_token: Some("two".to_string()),
                 max_packet_amount: u64::max_value(),
@@ -191,6 +193,7 @@ fn three_nodes() {
         btp_address: ([127, 0, 0, 1], get_open_port(None)).into(),
         http_address: ([127, 0, 0, 1], node3_http).into(),
         secret_seed: cli::random_secret(),
+        route_broadcast_interval: Some(200),
     };
     let node3_clone = node3.clone();
     runtime.spawn(
