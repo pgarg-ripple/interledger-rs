@@ -10,7 +10,7 @@ use interledger_service::{
     OutgoingService,
 };
 
-use interledger_packet::{Address, ErrorCode, RejectBuilder};
+use interledger_packet::{Address, ErrorCode, FulfillBuilder, RejectBuilder};
 use mockito::mock;
 
 use crate::fixtures::{BODY, MESSAGES_API, SERVICE_ADDRESS, SETTLEMENT_API, TEST_ACCOUNT_0};
@@ -178,7 +178,7 @@ pub fn test_store(store_fails: bool, account_has_engine: bool) -> TestStore {
     }
 }
 
-pub fn test_api(
+pub fn test_api_settle(
     test_store: TestStore,
 ) -> SettlementApi<TestStore, impl OutgoingService<TestAccount> + Clone + Send + Sync, TestAccount>
 {
@@ -188,6 +188,21 @@ pub fn test_api(
             message: b"No other outgoing handler!",
             data: &[],
             triggered_by: Some(&SERVICE_ADDRESS),
+        }
+        .build()))
+    });
+
+    SettlementApi::new(test_store, outgoing)
+}
+
+pub fn test_api_message(
+    test_store: TestStore,
+) -> SettlementApi<TestStore, impl OutgoingService<TestAccount> + Clone + Send + Sync, TestAccount>
+{
+    let outgoing = outgoing_service_fn(|_request| {
+        Box::new(ok(FulfillBuilder {
+            fulfillment: &[0; 32],
+            data: b"hello!",
         }
         .build()))
     });

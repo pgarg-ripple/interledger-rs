@@ -1,10 +1,12 @@
 use crate::{SettlementAccount, SettlementStore};
-use futures::{future::result, Future};
+use futures::{
+    future::{ok, result},
+    Future,
+};
 use hyper::Response;
 use interledger_ildcp::IldcpAccount;
 use interledger_packet::PrepareBuilder;
 use interledger_service::{AccountStore, OutgoingRequest, OutgoingService};
-use serde_json::Value;
 use std::{
     marker::PhantomData,
     str::{self, FromStr},
@@ -46,8 +48,6 @@ impl_web! {
 
         // TODO: The SE should retry until this is ACK’d so it needs to be idempotent,
         // https://stripe.com/docs/api/idempotent_requests?lang=curl
-        // TODO: Can we make account_id: A::AccountId somehow?
-        // derive(Extract) is not possible since it's inside a trait.
         // TODO: Can the Response<()> be converted to a Response<String>? It'd
         // be nice if we could include the full error message body (currently
         // it's just the header)
@@ -106,7 +106,7 @@ impl_web! {
         // Gets called by our settlement engine, forwards the request outwards
         // until it reaches the peer's settlement engine
         #[post("/accounts/:account_id/messages")]
-        fn send_outgoing_message(&self, account_id: String, body: Vec<u8>)-> impl Future<Item = Value, Error = Response<()>> {
+        fn send_outgoing_message(&self, account_id: String, body: Vec<u8>)-> impl Future<Item = Vec<u8>, Error = Response<()>> {
             let store = self.store.clone();
             let mut outgoing_handler = self.outgoing_handler.clone();
             result(A::AccountId::from_str(&account_id)
@@ -153,10 +153,7 @@ impl_web! {
                     })
                 })
                 .and_then(|fulfill| {
-                    serde_json::from_slice(fulfill.data()).map_err(|err| {
-                        error!("Error parsing response from peer settlement engine as JSON: {:?}", err);
-                        Response::builder().status(502).body(()).unwrap()
-                    })
+                    ok(fulfill.data().to_vec())
                 })
         }
     }
@@ -175,7 +172,7 @@ mod tests {
     fn settlement_ok() {
         let id = TEST_ACCOUNT_0.clone().id.to_string();
         let store = test_store(false, true);
-        let api = test_api(store);
+        let api = test_api_settle(store);
 
         let ret = api.receive_settlement(id, SETTLEMENT_BODY).wait();
         assert!(ret.is_ok());
@@ -185,7 +182,7 @@ mod tests {
     fn account_has_no_engine_configured() {
         let id = TEST_ACCOUNT_0.clone().id.to_string();
         let store = test_store(false, false);
-        let api = test_api(store);
+        let api = test_api_settle(store);
 
         let ret = api
             .receive_settlement(id, SETTLEMENT_BODY)
@@ -198,7 +195,7 @@ mod tests {
     fn update_balance_for_incoming_settlement_fails() {
         let id = TEST_ACCOUNT_0.clone().id.to_string();
         let store = test_store(true, true);
-        let api = test_api(store);
+        let api = test_api_settle(store);
 
         let ret: Response<_> = api
             .receive_settlement(id, SETTLEMENT_BODY)
@@ -213,7 +210,7 @@ mod tests {
         // supplying an id that cannot be parsed to that type must fail
         let id = "a".to_string();
         let store = test_store(false, true);
-        let api = test_api(store);
+        let api = test_api_settle(store);
 
         let ret: Response<_> = api
             .receive_settlement(id, SETTLEMENT_BODY)
@@ -229,7 +226,7 @@ mod tests {
             accounts: Arc::new(vec![]),
             should_fail: false,
         };
-        let api = test_api(store);
+        let api = test_api_settle(store);
 
         let ret: Response<_> = api
             .receive_settlement(id, SETTLEMENT_BODY)
@@ -239,4 +236,14 @@ mod tests {
     }
 
     // Message Tests
+
+    #[test]
+    fn message_ok() {
+        let id = TEST_ACCOUNT_0.clone().id.to_string();
+        let store = test_store(false, true);
+        let api = test_api_message(store);
+
+        let ret = api.send_outgoing_message(id, vec![]).wait().unwrap();
+        assert_eq!(ret, b"hello!");
+    }
 }
