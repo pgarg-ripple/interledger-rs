@@ -1,17 +1,25 @@
 use super::*;
 use crate::SettlementEngineDetails;
-use futures::{future::{err, ok}, Future};
-use interledger_service::{incoming_service_fn, outgoing_service_fn, Account, AccountStore, IncomingService, OutgoingService};
+use futures::{
+    future::{err, ok},
+    Future,
+};
 use interledger_ildcp::IldcpAccount;
+use interledger_service::{
+    incoming_service_fn, outgoing_service_fn, Account, AccountStore, IncomingService,
+    OutgoingService,
+};
 
 use interledger_packet::{Address, ErrorCode, RejectBuilder};
 use mockito::mock;
 
+use crate::fixtures::{
+    BODY, MESSAGES_API, SERVICE_ADDRESS, SETTLEMENT_API, TEST_ACCOUNT_0, TEST_MUTEX,
+};
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 use url::Url;
-use crate::fixtures::{TEST_ACCOUNT_0, SERVICE_ADDRESS, SETTLEMENT_API, MESSAGES_API, BODY, TEST_MUTEX};
-use std::sync::Arc;
 
 // Test account that implements settlement + ildcp info
 
@@ -116,6 +124,7 @@ impl TestAccount {
     }
 }
 
+#[allow(dead_code)]
 pub fn mock_settlement(status_code: usize) -> mockito::Mock {
     mock("POST", SETTLEMENT_API.clone())
         .match_header("content-type", "application/octet-stream")
@@ -146,10 +155,8 @@ where
     result
 }
 
-pub fn test_service() -> SettlementMessageService<
-    impl IncomingService<TestAccount> + Clone,
-    TestAccount,
-> {
+pub fn test_service(
+) -> SettlementMessageService<impl IncomingService<TestAccount> + Clone, TestAccount> {
     SettlementMessageService::new(
         SERVICE_ADDRESS.clone(),
         incoming_service_fn(|_request| {
@@ -164,11 +171,9 @@ pub fn test_service() -> SettlementMessageService<
     )
 }
 
-pub fn test_api() -> SettlementApi<
-        TestStore,
-        impl OutgoingService<TestAccount> + Clone + Send + Sync,
-        TestAccount,
-> {
+pub fn test_api(
+) -> SettlementApi<TestStore, impl OutgoingService<TestAccount> + Clone + Send + Sync, TestAccount>
+{
     let test_store = TestStore {
         accounts: Arc::new(vec![TEST_ACCOUNT_0.clone()]),
     };
@@ -183,10 +188,5 @@ pub fn test_api() -> SettlementApi<
         .build()))
     });
 
-    let api = SettlementApi::new(
-        test_store,
-        outgoing,
-    );
-    
-    return api
+    SettlementApi::new(test_store, outgoing)
 }

@@ -182,7 +182,7 @@ mod tests {
         assert_eq!(reject.triggered_by().unwrap(), SERVICE_ADDRESS.clone());
         assert_eq!(
             reject.message(),
-            "Got settlement packet from account 0 but there is no settlement engine url configured for it".as_bytes(),
+            b"Got settlement packet from account 0 but there is no settlement engine url configured for it" as &[u8],
         );
     }
 
@@ -211,7 +211,7 @@ mod tests {
         m.assert();
         assert_eq!(reject.code(), ErrorCode::F02_UNREACHABLE);
         assert_eq!(reject.triggered_by().unwrap(), SERVICE_ADDRESS.clone());
-        assert_eq!(reject.message(), "No other incoming handler!".as_bytes(),);
+        assert_eq!(reject.message(), b"No other incoming handler!");
     }
 
     #[test]

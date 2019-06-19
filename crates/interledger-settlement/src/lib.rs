@@ -5,6 +5,7 @@ extern crate log;
 #[macro_use]
 extern crate tower_web;
 #[macro_use]
+#[cfg(test)]
 extern crate lazy_static;
 
 use futures::Future;
@@ -14,11 +15,11 @@ use url::Url;
 
 mod api;
 mod client;
+#[cfg(test)]
+mod fixtures;
 mod message_service;
 #[cfg(test)]
 mod test_helpers;
-#[cfg(test)]
-mod fixtures;
 
 pub use api::SettlementApi;
 pub use client::SettlementClient;
