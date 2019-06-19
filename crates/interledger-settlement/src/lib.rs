@@ -15,6 +15,8 @@ use url::Url;
 mod api;
 mod client;
 mod message_service;
+#[cfg(test)]
+mod test_helpers;
 
 pub use api::SettlementApi;
 pub use client::SettlementClient;
