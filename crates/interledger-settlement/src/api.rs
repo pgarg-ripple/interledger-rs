@@ -1,8 +1,5 @@
 use crate::{SettlementAccount, SettlementStore};
-use futures::{
-    future::result,
-    Future,
-};
+use futures::{future::result, Future};
 use hyper::Response;
 use interledger_ildcp::IldcpAccount;
 use interledger_packet::PrepareBuilder;

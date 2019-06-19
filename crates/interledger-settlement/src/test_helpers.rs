@@ -13,9 +13,7 @@ use interledger_service::{
 use interledger_packet::{Address, ErrorCode, RejectBuilder};
 use mockito::mock;
 
-use crate::fixtures::{
-    BODY, MESSAGES_API, SERVICE_ADDRESS, SETTLEMENT_API, TEST_ACCOUNT_0,
-};
+use crate::fixtures::{BODY, MESSAGES_API, SERVICE_ADDRESS, SETTLEMENT_API, TEST_ACCOUNT_0};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
