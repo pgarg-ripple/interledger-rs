@@ -25,13 +25,6 @@ pub struct SettlementApi<S, O, A> {
     account_type: PhantomData<A>,
 }
 
-#[derive(Extract, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct SettlementDetails {
-    pub amount: u64,
-    pub scale: u32,
-}
-
 #[derive(Debug, Response)]
 #[web(status = "200")]
 struct Success;
@@ -62,9 +55,8 @@ impl_web! {
         // be nice if we could include the full error message body (currently
         // it's just the header)
         #[post("/accounts/:account_id/settlement")]
-        fn receive_settlement(&self, account_id: String, body: SettlementDetails) -> impl Future<Item = Success, Error = Response<()>> {
-            let amount = body.amount;
-            let _scale = body.scale; // todo: figure out how to use this, is it really necessary? should we check if it matches the SE details?
+        fn receive_settlement(&self, account_id: String, body: u64) -> impl Future<Item = Success, Error = Response<()>> {
+            let amount = body;
             let store = self.store.clone();
             let store_clone = store.clone();
             result(A::AccountId::from_str(&account_id)
@@ -186,7 +178,7 @@ mod tests {
         let store = test_store(false, true);
         let api = test_api(store);
 
-        let ret = api.receive_settlement(id, SETTLEMENT_BODY.clone()).wait();
+        let ret = api.receive_settlement(id, SETTLEMENT_BODY).wait();
         assert!(ret.is_ok());
     }
 
@@ -197,7 +189,7 @@ mod tests {
         let api = test_api(store);
 
         let ret = api
-            .receive_settlement(id, SETTLEMENT_BODY.clone())
+            .receive_settlement(id, SETTLEMENT_BODY)
             .wait()
             .unwrap_err();
         assert_eq!(ret.status().as_u16(), 404);
@@ -210,7 +202,7 @@ mod tests {
         let api = test_api(store);
 
         let ret: Response<_> = api
-            .receive_settlement(id, SETTLEMENT_BODY.clone())
+            .receive_settlement(id, SETTLEMENT_BODY)
             .wait()
             .unwrap_err();
         assert_eq!(ret.status().as_u16(), 201);
@@ -223,7 +215,7 @@ mod tests {
         let api = test_api(store);
 
         let ret: Response<_> = api
-            .receive_settlement(id, SETTLEMENT_BODY.clone())
+            .receive_settlement(id, SETTLEMENT_BODY)
             .wait()
             .unwrap_err();
         assert_eq!(ret.status().as_u16(), 404);
@@ -239,7 +231,7 @@ mod tests {
         let api = test_api(store);
 
         let ret: Response<_> = api
-            .receive_settlement(id, SETTLEMENT_BODY.clone())
+            .receive_settlement(id, SETTLEMENT_BODY)
             .wait()
             .unwrap_err();
         assert_eq!(ret.status().as_u16(), 404);

@@ -151,8 +151,7 @@ where
     // Only run one test at a time
     let _ = env_logger::try_init();
     let mut runtime = Runtime::new().unwrap();
-    let result = runtime.block_on(f);
-    result
+    runtime.block_on(f)
 }
 
 pub fn test_service(

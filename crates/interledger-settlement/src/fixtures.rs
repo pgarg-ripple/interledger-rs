@@ -1,17 +1,12 @@
 use interledger_packet::Address;
 use mockito::Matcher;
-use parking_lot::Mutex;
 use std::str::FromStr;
 
-use crate::api::SettlementDetails;
 use crate::test_helpers::TestAccount;
 
 pub static DATA: &str = "DATA_FOR_SETTLEMENT_ENGINE";
 pub static BODY: &str = "hi";
-pub static SETTLEMENT_BODY: SettlementDetails = SettlementDetails {
-    amount: 100,
-    scale: 9,
-};
+pub static SETTLEMENT_BODY: u64 = 100;
 
 lazy_static! {
     pub static ref TEST_ACCOUNT_0: TestAccount =
