@@ -70,19 +70,19 @@ impl_web! {
             result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
                     error!("Unable to parse account id: {}", account_id);
-                    Response::builder().status(400).body(()).unwrap()
+                    Response::builder().status(404).body(()).unwrap()
                 }))
                 .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_| {
                     error!("Error getting account: {}", account_id);
                     Response::builder().status(404).body(()).unwrap()
                 }))
-                .and_then(move |mut accounts| {
-                    let account = accounts.pop().unwrap();
+                .and_then(|accounts| {
+                    let account = &accounts[0];
                     if let Some(settlement_engine) = account.settlement_engine_details() {
-                        Ok((account, settlement_engine))
+                        Ok((account.clone(), settlement_engine))
                     } else {
                         error!("Account {} does not have settlement engine details configured. Cannot handle incoming settlement", account.id());
-                        Err(Response::builder().status(500).body(()).unwrap())
+                        Err(Response::builder().status(404).body(()).unwrap())
                     }
                 })
                 .and_then(move |(account, settlement_engine)| {
@@ -106,7 +106,7 @@ impl_web! {
                     store_clone.update_balance_for_incoming_settlement(account_id, amount)
                         .map_err(move |_| {
                             error!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
-                            Response::builder().status(500).body(()).unwrap()
+                            Response::builder().status(201).body(()).unwrap() // Request was sent, but SE operation have failed.
                         })
                 })
                 .and_then(|_| Ok(Success))
@@ -200,7 +200,7 @@ mod tests {
             .receive_settlement(id, SETTLEMENT_BODY.clone())
             .wait()
             .unwrap_err();
-        assert_eq!(ret.status().as_u16(), 500);
+        assert_eq!(ret.status().as_u16(), 404);
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
             .receive_settlement(id, SETTLEMENT_BODY.clone())
             .wait()
             .unwrap_err();
-        assert_eq!(ret.status().as_u16(), 500);
+        assert_eq!(ret.status().as_u16(), 201);
     }
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
             .receive_settlement(id, SETTLEMENT_BODY.clone())
             .wait()
             .unwrap_err();
-        assert_eq!(ret.status().as_u16(), 400);
+        assert_eq!(ret.status().as_u16(), 404);
     }
 
     #[test]
