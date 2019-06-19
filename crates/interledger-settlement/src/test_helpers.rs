@@ -14,7 +14,7 @@ use interledger_packet::{Address, ErrorCode, RejectBuilder};
 use mockito::mock;
 
 use crate::fixtures::{
-    BODY, MESSAGES_API, SERVICE_ADDRESS, SETTLEMENT_API, TEST_ACCOUNT_0, TEST_MUTEX,
+    BODY, MESSAGES_API, SERVICE_ADDRESS, SETTLEMENT_API, TEST_ACCOUNT_0,
 };
 use std::str::FromStr;
 use std::sync::Arc;
@@ -150,10 +150,8 @@ where
 {
     // Only run one test at a time
     let _ = env_logger::try_init();
-    let lock = TEST_MUTEX.lock();
     let mut runtime = Runtime::new().unwrap();
     let result = runtime.block_on(f);
-    drop(lock);
     result
 }
 

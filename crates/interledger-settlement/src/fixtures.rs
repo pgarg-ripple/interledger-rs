@@ -14,7 +14,6 @@ pub static SETTLEMENT_BODY: SettlementDetails = SettlementDetails {
 };
 
 lazy_static! {
-    pub static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
     pub static ref TEST_ACCOUNT_0: TestAccount =
         TestAccount::new(0, "http://localhost:1234", "peer.settle.xrp-ledger");
     pub static ref SERVICE_ADDRESS: Address = Address::from_str("example.connector").unwrap();

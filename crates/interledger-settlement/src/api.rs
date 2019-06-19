@@ -115,7 +115,7 @@ impl_web! {
         // Gets called by our settlement engine, forwards the request outwards
         // until it reaches the peer's settlement engine
         #[post("/accounts/:account_id/messages")]
-        fn send_outgoing_message(&self, account_id: String, body: String)-> impl Future<Item = Value, Error = Response<()>> {
+        fn send_outgoing_message(&self, account_id: String, body: Vec<u8>)-> impl Future<Item = Value, Error = Response<()>> {
             let store = self.store.clone();
             let mut outgoing_handler = self.outgoing_handler.clone();
             result(A::AccountId::from_str(&account_id)
@@ -151,7 +151,7 @@ impl_web! {
                             destination: settlement_engine.ilp_address,
                             amount: 0,
                             expires_at: SystemTime::now() + Duration::from_secs(30),
-                            data: body.as_ref(),
+                            data: &body,
                             execution_condition: &PEER_PROTOCOL_CONDITION,
                         }.build()
                     })
