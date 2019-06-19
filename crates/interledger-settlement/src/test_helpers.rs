@@ -1,28 +1,19 @@
 use super::*;
 use crate::SettlementEngineDetails;
-use futures::{future::err, Future};
-use interledger_service::{incoming_service_fn, Account, BoxedIlpFuture, IncomingService};
-use parking_lot::Mutex;
+use futures::{future::{err, ok}, Future};
+use interledger_service::{incoming_service_fn, outgoing_service_fn, Account, AccountStore, IncomingService, OutgoingService};
+use interledger_ildcp::IldcpAccount;
 
 use interledger_packet::{Address, ErrorCode, RejectBuilder};
 use mockito::mock;
-use mockito::Matcher;
 
 use std::str::FromStr;
 use tokio::runtime::Runtime;
 use url::Url;
+use crate::fixtures::{TEST_ACCOUNT_0, SERVICE_ADDRESS, SETTLEMENT_API, MESSAGES_API, BODY, TEST_MUTEX};
+use std::sync::Arc;
 
-pub static DATA: &str = "DATA_FOR_SETTLEMENT_ENGINE";
-pub static BODY: &str = "hi";
-
-lazy_static! {
-    pub static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
-    pub static ref TEST_ACCOUNT_0: TestAccount =
-        TestAccount::new(0, "http://localhost:1234", "peer.settle.xrp-ledger");
-    pub static ref SERVICE_ADDRESS: Address = Address::from_str("example.connector").unwrap();
-    pub static ref SETTLEMENT_API: Matcher =
-        Matcher::Regex(r"^/accounts/\d*/messages$".to_string());
-}
+// Test account that implements settlement + ildcp info
 
 #[derive(Debug, Clone)]
 pub struct TestAccount {
@@ -52,6 +43,68 @@ impl SettlementAccount for TestAccount {
     }
 }
 
+impl IldcpAccount for TestAccount {
+    fn asset_code(&self) -> &str {
+        "XYZ"
+    }
+
+    fn asset_scale(&self) -> u8 {
+        9
+    }
+
+    fn client_address(&self) -> &Address {
+        &self.ilp_address
+    }
+}
+
+// Test Store
+#[derive(Clone)]
+pub struct TestStore {
+    pub accounts: Arc<Vec<TestAccount>>,
+}
+
+impl SettlementStore for TestStore {
+    type Account = TestAccount;
+
+    fn update_balance_for_incoming_settlement(
+        &self,
+        _account_id: <Self::Account as Account>::AccountId,
+        _amount: u64,
+    ) -> Box<Future<Item = (), Error = ()> + Send> {
+        // Do we need to do anything here?
+        // Maybe add some cache for the idempotency flag later
+        Box::new(ok(()))
+    }
+}
+
+impl AccountStore for TestStore {
+    type Account = TestAccount;
+
+    fn get_accounts(
+        &self,
+        account_ids: Vec<<<Self as AccountStore>::Account as Account>::AccountId>,
+    ) -> Box<Future<Item = Vec<Self::Account>, Error = ()> + Send> {
+        let accounts: Vec<TestAccount> = self
+            .accounts
+            .iter()
+            .filter_map(|account| {
+                if account_ids.contains(&account.id) {
+                    Some(account.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if accounts.len() == account_ids.len() {
+            Box::new(ok(accounts))
+        } else {
+            Box::new(err(()))
+        }
+    }
+}
+
+// Test Service
+
 impl TestAccount {
     pub fn new(id: u64, url: &str, ilp_address: &str) -> Self {
         Self {
@@ -63,8 +116,15 @@ impl TestAccount {
     }
 }
 
-pub fn mock_settle(status_code: usize) -> mockito::Mock {
+pub fn mock_settlement(status_code: usize) -> mockito::Mock {
     mock("POST", SETTLEMENT_API.clone())
+        .match_header("content-type", "application/octet-stream")
+        .with_status(status_code)
+        .with_body(BODY)
+}
+
+pub fn mock_message(status_code: usize) -> mockito::Mock {
+    mock("POST", MESSAGES_API.clone())
         .match_header("content-type", "application/octet-stream")
         .with_status(status_code)
         .with_body(BODY)
@@ -87,7 +147,7 @@ where
 }
 
 pub fn test_service() -> SettlementMessageService<
-    impl IncomingService<TestAccount, Future = BoxedIlpFuture> + Clone,
+    impl IncomingService<TestAccount> + Clone,
     TestAccount,
 > {
     SettlementMessageService::new(
@@ -102,4 +162,31 @@ pub fn test_service() -> SettlementMessageService<
             .build()))
         }),
     )
+}
+
+pub fn test_api() -> SettlementApi<
+        TestStore,
+        impl OutgoingService<TestAccount> + Clone + Send + Sync,
+        TestAccount,
+> {
+    let test_store = TestStore {
+        accounts: Arc::new(vec![TEST_ACCOUNT_0.clone()]),
+    };
+
+    let outgoing = outgoing_service_fn(|_request| {
+        Box::new(err(RejectBuilder {
+            code: ErrorCode::F02_UNREACHABLE,
+            message: b"No other outgoing handler!",
+            data: &[],
+            triggered_by: Some(&SERVICE_ADDRESS),
+        }
+        .build()))
+    });
+
+    let api = SettlementApi::new(
+        test_store,
+        outgoing,
+    );
+    
+    return api
 }

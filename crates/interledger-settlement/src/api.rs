@@ -19,17 +19,17 @@ static PEER_PROTOCOL_CONDITION: [u8; 32] = [
     110, 226, 51, 179, 144, 42, 89, 29, 13, 95, 41, 37,
 ];
 
-pub struct SettlementApi<S, T, A> {
-    outgoing_handler: S,
-    store: T,
+pub struct SettlementApi<S, O, A> {
+    outgoing_handler: O,
+    store: S,
     account_type: PhantomData<A>,
 }
 
 #[derive(Extract)]
 #[serde(rename_all = "camelCase")]
 struct SettlementDetails {
-    account_id: String,
     amount: u64,
+    scale: u32,
 }
 
 #[derive(Response)]
@@ -39,27 +39,32 @@ struct Success;
 // TODO add authentication
 
 impl_web! {
-    impl<S, T, A> SettlementApi<S, T, A>
+    impl<S, O, A> SettlementApi<S, O, A>
     where
-        S: OutgoingService<A> + Clone + Send + Sync + 'static,
-        T: SettlementStore<Account = A> + AccountStore<Account = A> + Clone + Send + Sync + 'static,
+        S: SettlementStore<Account = A> + AccountStore<Account = A> + Clone + Send + Sync + 'static,
+        O: OutgoingService<A> + Clone + Send + Sync + 'static,
         A: SettlementAccount + IldcpAccount + Send + Sync + 'static,
     {
-        pub fn new(store: T, outgoing_handler: S) -> Self {
+        pub fn new(store: S, outgoing_handler: O) -> Self {
             SettlementApi {
-                outgoing_handler,
                 store,
+                outgoing_handler,
                 account_type: PhantomData,
             }
         }
 
-        #[post("/settlements/receiveMoney")]
-        fn receive_settlement(&self, body: SettlementDetails) -> impl Future<Item = Success, Error = Response<()>> {
+
+        // TODO: The SE should retry until this is ACK’d so it needs to be idempotent,
+        // https://stripe.com/docs/api/idempotent_requests?lang=curl
+        // TODO: Can we make account_id: A::AccountId somehow?
+        // derive(Extract) is not possible since it's inside a trait.
+        #[post("/accounts/:account_id/settlement")]
+        fn receive_settlement(&self, account_id: String, body: SettlementDetails) -> impl Future<Item = Success, Error = Response<()>> {
             let amount = body.amount;
+            let _scale = body.scale; // todo: figure out how to use this, is it really necessary? should we check if it matches the SE details?
             let store = self.store.clone();
             let store_clone = store.clone();
-            let account_id = body.account_id;
-            result(A::AccountId::from_str(account_id.as_str())
+            result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
                     error!("Unable to parse account id: {}", account_id);
                     Response::builder().status(400).body(()).unwrap()
@@ -78,8 +83,10 @@ impl_web! {
                     }
                 })
                 .and_then(move |(account, settlement_engine)| {
-                    let account_id = account.id();
+                    let account_id = account.id(); // Get the account_id back
 
+                    // TODO: Extract into a method since this is used in
+                    // client.rs as well as the exchange_rates.rs service
                     let amount = if account.asset_scale() >= settlement_engine.asset_scale {
                         amount
                             * 10u64.pow(u32::from(
@@ -92,6 +99,7 @@ impl_web! {
                             ))
                     };
 
+                    // TODO Idempotency header!
                     store_clone.update_balance_for_incoming_settlement(account_id, amount)
                         .map_err(move |_| {
                             error!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);

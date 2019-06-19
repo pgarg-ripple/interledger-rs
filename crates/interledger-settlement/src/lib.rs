@@ -17,6 +17,8 @@ mod client;
 mod message_service;
 #[cfg(test)]
 mod test_helpers;
+#[cfg(test)]
+mod fixtures;
 
 pub use api::SettlementApi;
 pub use client::SettlementClient;

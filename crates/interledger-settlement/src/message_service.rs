@@ -124,7 +124,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::*;
+    use crate::fixtures::{BODY, DATA, SERVICE_ADDRESS, TEST_ACCOUNT_0};
+    use crate::test_helpers::{block_on, mock_message, test_service};
     use interledger_packet::{Fulfill, PrepareBuilder, Reject};
     use std::str::FromStr;
     use std::time::SystemTime;
@@ -132,7 +133,7 @@ mod tests {
     #[test]
     fn settlement_ok() {
         // happy case
-        let m = mock_settle(200).create();
+        let m = mock_message(200).create();
         let mut settlement = test_service();
         let destination = TEST_ACCOUNT_0.clone().ilp_address;
         let fulfill: Fulfill = block_on(
@@ -158,7 +159,7 @@ mod tests {
     #[test]
     fn no_settlement_engine_configured_for_destination() {
         // happy case
-        let m = mock_settle(200).create().expect(0);
+        let m = mock_message(200).create().expect(0);
         let mut settlement = test_service();
         let destination = Address::from_str("example.some.address").unwrap();
         let reject: Reject = block_on(
@@ -178,7 +179,7 @@ mod tests {
 
         m.assert();
         assert_eq!(reject.code(), ErrorCode::F02_UNREACHABLE);
-        assert_eq!(reject.triggered_by(), SERVICE_ADDRESS.clone());
+        assert_eq!(reject.triggered_by().unwrap(), SERVICE_ADDRESS.clone());
         assert_eq!(
             reject.message(),
             "Got settlement packet from account 0 but there is no settlement engine url configured for it".as_bytes(),
@@ -188,7 +189,7 @@ mod tests {
     #[test]
     fn account_does_not_have_settlement_engine() {
         // happy case
-        let m = mock_settle(200).create().expect(0);
+        let m = mock_message(200).create().expect(0);
         let mut settlement = test_service();
         let mut acc = TEST_ACCOUNT_0.clone();
         acc.no_details = true; // Hide the settlement engine data from the account
@@ -209,7 +210,7 @@ mod tests {
 
         m.assert();
         assert_eq!(reject.code(), ErrorCode::F02_UNREACHABLE);
-        assert_eq!(reject.triggered_by(), SERVICE_ADDRESS.clone());
+        assert_eq!(reject.triggered_by().unwrap(), SERVICE_ADDRESS.clone());
         assert_eq!(reject.message(), "No other incoming handler!".as_bytes(),);
     }
 
@@ -218,7 +219,7 @@ mod tests {
         // for whatever reason the engine rejects our request with a 500 code
         let error_code = 500;
         let error_str = "Internal Server Error";
-        let m = mock_settle(error_code).create();
+        let m = mock_message(error_code).create();
         let destination = TEST_ACCOUNT_0.clone().ilp_address;
         let mut settlement = test_service();
         let reject: Reject = block_on(
@@ -240,7 +241,7 @@ mod tests {
         assert_eq!(reject.code(), ErrorCode::T00_INTERNAL_ERROR);
         // The engine rejected the message, not the connector's service,
         // so the triggered by should be the ilp address of th engine - I think.
-        assert_eq!(reject.triggered_by(), SERVICE_ADDRESS.clone());
+        assert_eq!(reject.triggered_by().unwrap(), SERVICE_ADDRESS.clone());
         assert_eq!(
             reject.message(),
             format!(
