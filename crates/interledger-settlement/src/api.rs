@@ -1,6 +1,6 @@
 use crate::{SettlementAccount, SettlementStore};
 use futures::{
-    future::{err, result, Either},
+    future::result,
     Future,
 };
 use hyper::Response;
@@ -112,61 +112,61 @@ impl_web! {
                 .and_then(|_| Ok(Success))
         }
 
-        #[post("/settlements/sendMessage")]
-        fn send_outgoing_message(&self, body: Value)-> impl Future<Item = Value, Error = Response<()>> {
-            if let Value::Object(json) = &body {
-                if let Some(account_id) = json.get("accountId").and_then(|a| a.as_str()) {
-                    if let Ok(account_id) = A::AccountId::from_str(account_id) {
-                        let mut outgoing_handler = self.outgoing_handler.clone();
-                        return Either::A(self.store.get_accounts(vec![account_id])
-                            .map_err(move |_| {
-                                error!("Account {} not found", account_id);
-                                Response::builder().status(404).body(()).unwrap()
-                            })
-                            .and_then(|accounts| {
-                                let account = &accounts[0];
-                                if let Some(settlement_engine) = account.settlement_engine_details() {
-                                    Ok((account.clone(), settlement_engine))
-                                } else {
-                                    error!("Account {} has no settlement engine details configured, cannot send a settlement engine message to that account", accounts[0].id());
-                                    Err(Response::builder().status(404).body(()).unwrap())
-                                }
-                            })
-                            .and_then(move |(account, settlement_engine)| {
-                                // Send the message to the peer's settlement engine.
-                                // Note that we use dummy values for the `from` and `original_amount`
-                                // because this `OutgoingRequest` will bypass the router and thus will not
-                                // use either of these values. Including dummy values in the rare case where
-                                // we do not need them seems easier than using
-                                // `Option`s all over the place.
-                                outgoing_handler.send_request(OutgoingRequest {
-                                    from: account.clone(),
-                                    to: account.clone(),
-                                    original_amount: 0,
-                                    prepare: PrepareBuilder {
-                                        destination: settlement_engine.ilp_address,
-                                        amount: 0,
-                                        expires_at: SystemTime::now() + Duration::from_secs(30),
-                                        data: body.to_string().as_bytes().as_ref(),
-                                        execution_condition: &PEER_PROTOCOL_CONDITION,
-                                    }.build()
-                                })
-                                .map_err(|reject| {
-                                    error!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
-                                    // TODO should we respond with different HTTP error codes based on the ILP error codes?
-                                    Response::builder().status(502).body(()).unwrap()
-                                })
-                            })
-                            .and_then(|fulfill| {
-                                serde_json::from_slice(fulfill.data()).map_err(|err| {
-                                    error!("Error parsing response from peer settlement engine as JSON: {:?}", err);
-                                    Response::builder().status(502).body(()).unwrap()
-                                })
-                            }));
+        // Gets called by our settlement engine, forwards the request outwards
+        // until it reaches the peer's settlement engine
+        #[post("/accounts/:account_id/messages")]
+        fn send_outgoing_message(&self, account_id: String, body: String)-> impl Future<Item = Value, Error = Response<()>> {
+            let store = self.store.clone();
+            let mut outgoing_handler = self.outgoing_handler.clone();
+            result(A::AccountId::from_str(&account_id)
+                .map_err(move |_err| {
+                    error!("Unable to parse account id: {}", account_id);
+                    Response::builder().status(404).body(()).unwrap()
+                }))
+                .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_| {
+                    error!("Error getting account: {}", account_id);
+                    Response::builder().status(404).body(()).unwrap()
+                }))
+                .and_then(|accounts| {
+                    let account = &accounts[0];
+                    if let Some(settlement_engine) = account.settlement_engine_details() {
+                        Ok((account.clone(), settlement_engine))
+                    } else {
+                        error!("Account {} has no settlement engine details configured, cannot send a settlement engine message to that account", accounts[0].id());
+                        Err(Response::builder().status(404).body(()).unwrap())
                     }
-                }
-            }
-            Either::B(err(Response::builder().status(400).body(()).unwrap()))
+                })
+                .and_then(move |(account, settlement_engine)| {
+                    // Send the message to the peer's settlement engine.
+                    // Note that we use dummy values for the `from` and `original_amount`
+                    // because this `OutgoingRequest` will bypass the router and thus will not
+                    // use either of these values. Including dummy values in the rare case where
+                    // we do not need them seems easier than using
+                    // `Option`s all over the place.
+                    outgoing_handler.send_request(OutgoingRequest {
+                        from: account.clone(),
+                        to: account.clone(),
+                        original_amount: 0,
+                        prepare: PrepareBuilder {
+                            destination: settlement_engine.ilp_address,
+                            amount: 0,
+                            expires_at: SystemTime::now() + Duration::from_secs(30),
+                            data: body.as_ref(),
+                            execution_condition: &PEER_PROTOCOL_CONDITION,
+                        }.build()
+                    })
+                    .map_err(|reject| {
+                        error!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
+                        // spec: "Could not process sending of the message -> 400"
+                        Response::builder().status(400).body(()).unwrap()
+                    })
+                })
+                .and_then(|fulfill| {
+                    serde_json::from_slice(fulfill.data()).map_err(|err| {
+                        error!("Error parsing response from peer settlement engine as JSON: {:?}", err);
+                        Response::builder().status(502).body(()).unwrap()
+                    })
+                })
         }
     }
 }
@@ -246,5 +246,4 @@ mod tests {
     }
 
     // Message Tests
-
 }
