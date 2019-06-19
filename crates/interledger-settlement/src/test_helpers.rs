@@ -69,6 +69,7 @@ impl IldcpAccount for TestAccount {
 #[derive(Clone)]
 pub struct TestStore {
     pub accounts: Arc<Vec<TestAccount>>,
+    pub should_fail: bool,
 }
 
 impl SettlementStore for TestStore {
@@ -81,7 +82,8 @@ impl SettlementStore for TestStore {
     ) -> Box<Future<Item = (), Error = ()> + Send> {
         // Do we need to do anything here?
         // Maybe add some cache for the idempotency flag later
-        Box::new(ok(()))
+        let ret = if self.should_fail { err(()) } else { ok(()) };
+        Box::new(ret)
     }
 }
 
@@ -171,13 +173,20 @@ pub fn test_service(
     )
 }
 
+pub fn test_store(store_fails: bool, account_has_engine: bool) -> TestStore {
+    let mut acc = TEST_ACCOUNT_0.clone();
+    acc.no_details = !account_has_engine;
+
+    TestStore {
+        accounts: Arc::new(vec![acc]),
+        should_fail: store_fails,
+    }
+}
+
 pub fn test_api(
+    test_store: TestStore,
 ) -> SettlementApi<TestStore, impl OutgoingService<TestAccount> + Clone + Send + Sync, TestAccount>
 {
-    let test_store = TestStore {
-        accounts: Arc::new(vec![TEST_ACCOUNT_0.clone()]),
-    };
-
     let outgoing = outgoing_service_fn(|_request| {
         Box::new(err(RejectBuilder {
             code: ErrorCode::F02_UNREACHABLE,

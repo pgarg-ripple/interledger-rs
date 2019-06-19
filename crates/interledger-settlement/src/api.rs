@@ -25,11 +25,11 @@ pub struct SettlementApi<S, O, A> {
     account_type: PhantomData<A>,
 }
 
-#[derive(Extract)]
+#[derive(Extract, Clone)]
 #[serde(rename_all = "camelCase")]
-struct SettlementDetails {
-    amount: u64,
-    scale: u32,
+pub struct SettlementDetails {
+    pub amount: u64,
+    pub scale: u32,
 }
 
 #[derive(Debug, Response)]
@@ -58,6 +58,9 @@ impl_web! {
         // https://stripe.com/docs/api/idempotent_requests?lang=curl
         // TODO: Can we make account_id: A::AccountId somehow?
         // derive(Extract) is not possible since it's inside a trait.
+        // TODO: Can the Response<()> be converted to a Response<String>? It'd
+        // be nice if we could include the full error message body (currently
+        // it's just the header)
         #[post("/accounts/:account_id/settlement")]
         fn receive_settlement(&self, account_id: String, body: SettlementDetails) -> impl Future<Item = Success, Error = Response<()>> {
             let amount = body.amount;
@@ -173,28 +176,75 @@ mod tests {
     use super::*;
     use crate::fixtures::*;
     use crate::test_helpers::*;
+    use std::sync::Arc;
+
+    // Settlement Tests
 
     #[test]
     fn settlement_ok() {
-        let api = test_api();
         let id = TEST_ACCOUNT_0.clone().id.to_string();
-        let body = SettlementDetails {
-            amount: 100,
-            scale: 9,
-        };
-        let ret = api.receive_settlement(id, body).wait();
+        let store = test_store(false, true);
+        let api = test_api(store);
+
+        let ret = api.receive_settlement(id, SETTLEMENT_BODY.clone()).wait();
         assert!(ret.is_ok());
     }
 
     #[test]
-    fn fails_with_invalid_id() {
-        let api = test_api();
-        let id = "-1".to_string(); // we give it a negative id which is invalid
-        let body = SettlementDetails {
-            amount: 100,
-            scale: 9,
-        };
-        let ret: Response<_> = api.receive_settlement(id, body).wait().unwrap_err();
+    fn account_has_no_engine_configured() {
+        let id = TEST_ACCOUNT_0.clone().id.to_string();
+        let store = test_store(false, false);
+        let api = test_api(store);
+
+        let ret = api
+            .receive_settlement(id, SETTLEMENT_BODY.clone())
+            .wait()
+            .unwrap_err();
+        assert_eq!(ret.status().as_u16(), 500);
+    }
+
+    #[test]
+    fn engine_rejects() {
+        let id = TEST_ACCOUNT_0.clone().id.to_string();
+        let store = test_store(true, true);
+        let api = test_api(store);
+
+        let ret: Response<_> = api
+            .receive_settlement(id, SETTLEMENT_BODY.clone())
+            .wait()
+            .unwrap_err();
+        assert_eq!(ret.status().as_u16(), 500);
+    }
+
+    #[test]
+    fn invalid_account_id() {
+        let id = "-1".to_string();
+        let store = test_store(false, true);
+        let api = test_api(store);
+
+        let ret: Response<_> = api
+            .receive_settlement(id, SETTLEMENT_BODY.clone())
+            .wait()
+            .unwrap_err();
         assert_eq!(ret.status().as_u16(), 400);
     }
+
+    #[test]
+    fn account_not_in_store() {
+        let id = TEST_ACCOUNT_0.clone().id.to_string();
+        let store = TestStore {
+            accounts: Arc::new(vec![]),
+            should_fail: false,
+        };
+        let api = test_api(store);
+
+        let ret: Response<_> = api
+            .receive_settlement(id, SETTLEMENT_BODY.clone())
+            .wait()
+            .unwrap_err();
+        assert_eq!(ret.status().as_u16(), 404);
+    }
+
+    // Message Tests
+
 }
