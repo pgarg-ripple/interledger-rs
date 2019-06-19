@@ -59,7 +59,7 @@ impl_web! {
             result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
                     error!("Unable to parse account id: {}", account_id);
-                    Response::builder().status(404).body(()).unwrap()
+                    Response::builder().status(400).body(()).unwrap()
                 }))
                 .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_| {
                     error!("Error getting account: {}", account_id);
@@ -92,10 +92,12 @@ impl_web! {
                     };
 
                     // TODO Idempotency header!
+                    // Return a 500 error if the balance could not be updated in
+                    // the store
                     store_clone.update_balance_for_incoming_settlement(account_id, amount)
                         .map_err(move |_| {
                             error!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
-                            Response::builder().status(201).body(()).unwrap() // Request was sent, but SE operation have failed.
+                            Response::builder().status(500).body(()).unwrap()
                         })
                 })
                 .and_then(|_| Ok(Success))
@@ -193,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn engine_rejects() {
+    fn update_balance_for_incoming_settlement_fails() {
         let id = TEST_ACCOUNT_0.clone().id.to_string();
         let store = test_store(true, true);
         let api = test_api(store);
@@ -202,12 +204,14 @@ mod tests {
             .receive_settlement(id, SETTLEMENT_BODY)
             .wait()
             .unwrap_err();
-        assert_eq!(ret.status().as_u16(), 201);
+        assert_eq!(ret.status().as_u16(), 500);
     }
 
     #[test]
     fn invalid_account_id() {
-        let id = "-1".to_string();
+        // the api is configured to take an accountId type
+        // supplying an id that cannot be parsed to that type must fail
+        let id = "a".to_string();
         let store = test_store(false, true);
         let api = test_api(store);
 
@@ -215,7 +219,7 @@ mod tests {
             .receive_settlement(id, SETTLEMENT_BODY)
             .wait()
             .unwrap_err();
-        assert_eq!(ret.status().as_u16(), 404);
+        assert_eq!(ret.status().as_u16(), 400);
     }
 
     #[test]

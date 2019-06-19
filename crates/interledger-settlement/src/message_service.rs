@@ -76,7 +76,6 @@ where
                     let status = response.status();
                     if status.is_success() {
                         Either::A(response.into_body().concat2().map_err(move |err| {
-                            // When can this case be reached?  Unclear when `concat2` fails
                             error!("Error concatenating settlement engine response body: {:?}", err);
                             RejectBuilder {
                                 code: ErrorCode::T00_INTERNAL_ERROR,
