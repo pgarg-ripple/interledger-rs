@@ -32,7 +32,7 @@ struct SettlementDetails {
     scale: u32,
 }
 
-#[derive(Response)]
+#[derive(Debug, Response)]
 #[web(status = "200")]
 struct Success;
 
@@ -165,5 +165,36 @@ impl_web! {
             }
             Either::B(err(Response::builder().status(400).body(()).unwrap()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures::*;
+    use crate::test_helpers::*;
+
+    #[test]
+    fn settlement_ok() {
+        let api = test_api();
+        let id = TEST_ACCOUNT_0.clone().id.to_string();
+        let body = SettlementDetails {
+            amount: 100,
+            scale: 9,
+        };
+        let ret = api.receive_settlement(id, body).wait();
+        assert!(ret.is_ok());
+    }
+
+    #[test]
+    fn fails_with_invalid_id() {
+        let api = test_api();
+        let id = "-1".to_string(); // we give it a negative id which is invalid
+        let body = SettlementDetails {
+            amount: 100,
+            scale: 9,
+        };
+        let ret: Response<_> = api.receive_settlement(id, body).wait().unwrap_err();
+        assert_eq!(ret.status().as_u16(), 400);
     }
 }
