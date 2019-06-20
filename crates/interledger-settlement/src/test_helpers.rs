@@ -183,8 +183,8 @@ pub fn test_api(
     should_fulfill: bool,
 ) -> SettlementApi<TestStore, impl OutgoingService<TestAccount> + Clone + Send + Sync, TestAccount>
 {
-    let outgoing = outgoing_service_fn(move |_| Box::new(
-        if should_fulfill {
+    let outgoing = outgoing_service_fn(move |_| {
+        Box::new(if should_fulfill {
             ok(FulfillBuilder {
                 fulfillment: &[0; 32],
                 data: b"hello!",
@@ -198,7 +198,7 @@ pub fn test_api(
                 triggered_by: Some(&SERVICE_ADDRESS),
             }
             .build())
-        }
-    ));
+        })
+    });
     SettlementApi::new(test_store, outgoing)
 }
