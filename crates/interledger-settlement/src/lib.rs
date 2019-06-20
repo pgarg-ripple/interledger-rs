@@ -49,7 +49,7 @@ pub trait SettlementStore {
     type Account: SettlementAccount;
 
     fn update_balance_for_incoming_settlement(
-        &self,
+        &mut self,
         account_id: <Self::Account as Account>::AccountId,
         amount: u64,
         idempotency_key: String,

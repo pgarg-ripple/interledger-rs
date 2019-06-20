@@ -112,7 +112,7 @@ local balance, prepaid_amount = unpack(redis.call('HMGET', account, 'balance', '
 -- If idempotency key has been used, then do not perform any operations
 local exists = redis.call('HGET', idempotency_key, 'set')
 if exists == '1' then
-    return balance
+    return balance + prepaid_amount
 end
 
 -- Otherwise, set it and make it expire after 24h (86400 sec)
@@ -1147,7 +1147,7 @@ impl SettlementStore for RedisStore {
     type Account = Account;
 
     fn update_balance_for_incoming_settlement(
-        &self,
+        &mut self,
         account_id: u64,
         amount: u64,
         idempotency_key: String,

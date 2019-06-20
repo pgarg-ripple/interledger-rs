@@ -7,6 +7,7 @@ use crate::test_helpers::TestAccount;
 pub static DATA: &str = "DATA_FOR_SETTLEMENT_ENGINE";
 pub static BODY: &str = "hi";
 pub static SETTLEMENT_BODY: u64 = 100;
+pub static IDEMPOTENCY: &str = "AJKJNUjM0oyiAN46";
 
 lazy_static! {
     pub static ref TEST_ACCOUNT_0: TestAccount =

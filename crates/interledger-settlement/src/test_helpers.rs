@@ -18,8 +18,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use url::Url;
-
-// Test account that implements settlement + ildcp info
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct TestAccount {
@@ -68,18 +67,26 @@ impl IldcpAccount for TestAccount {
 pub struct TestStore {
     pub accounts: Arc<Vec<TestAccount>>,
     pub should_fail: bool,
+    pub idempotency_keys: HashMap<String, u64>,
 }
 
 impl SettlementStore for TestStore {
     type Account = TestAccount;
 
     fn update_balance_for_incoming_settlement(
-        &self,
+        &mut self,
         _account_id: <Self::Account as Account>::AccountId,
         _amount: u64,
+        idempotency_key: String,
     ) -> Box<Future<Item = (), Error = ()> + Send> {
-        // Do we need to do anything here?
-        // Maybe add some cache for the idempotency flag later
+        // in the actual store this updates the database
+        // if the key is found, it skips the db update
+        // and returns early. here, we'll just check
+        // that the key count was incremented
+        let count = self.idempotency_keys
+            .entry(idempotency_key).or_insert(0);
+        *count += 1;
+
         let ret = if self.should_fail { err(()) } else { ok(()) };
         Box::new(ret)
     }
@@ -175,6 +182,7 @@ pub fn test_store(store_fails: bool, account_has_engine: bool) -> TestStore {
     TestStore {
         accounts: Arc::new(vec![acc]),
         should_fail: store_fails,
+        idempotency_keys: HashMap::new(),
     }
 }
 

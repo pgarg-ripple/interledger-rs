@@ -47,16 +47,16 @@ impl_web! {
         }
 
 
-        // TODO: The SE should retry until this is ACK’d so it needs to be idempotent,
-        // https://stripe.com/docs/api/idempotent_requests?lang=curl
         // TODO: Can the Response<()> be converted to a Response<String>? It'd
         // be nice if we could include the full error message body (currently
         // it's just the header)
+        // TODO: Verify that the idempotency_key is seen as a "Idempotency-Key"
+        // header by impl_web!
         #[post("/accounts/:account_id/settlement")]
-        fn receive_settlement(&self, account_id: String, body: u64) -> impl Future<Item = Success, Error = Response<()>> {
+        fn receive_settlement(&self, account_id: String, body: u64, idempotency_key: String) -> impl Future<Item = Success, Error = Response<()>> {
             let amount = body;
             let store = self.store.clone();
-            let store_clone = store.clone();
+            let mut store_clone = store.clone();
             result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
                     error!("Unable to parse account id: {}", account_id);
@@ -79,10 +79,7 @@ impl_web! {
                     let account_id = account.id();
                     let amount = amount.normalize_scale(account.asset_scale(), settlement_engine.asset_scale);
 
-                    // TODO Idempotency header!
-                    // Return a 500 error if the balance could not be updated in
-                    // the store
-                    store_clone.update_balance_for_incoming_settlement(account_id, amount, "".to_string())
+                    store_clone.update_balance_for_incoming_settlement(account_id, amount, idempotency_key)
                         .map_err(move |_| {
                             error!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
                             Response::builder().status(500).body(()).unwrap()
@@ -152,6 +149,7 @@ mod tests {
     use crate::fixtures::*;
     use crate::test_helpers::*;
     use std::sync::Arc;
+    use std::collections::HashMap;
 
     // Settlement Tests
 
@@ -164,7 +162,7 @@ mod tests {
             let store = test_store(false, true);
             let api = test_api(store, false);
 
-            let ret = api.receive_settlement(id, SETTLEMENT_BODY).wait();
+            let ret = api.receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string()).wait();
             assert!(ret.is_ok());
         }
 
@@ -175,7 +173,7 @@ mod tests {
             let api = test_api(store, false);
 
             let ret = api
-                .receive_settlement(id, SETTLEMENT_BODY)
+                .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
@@ -188,7 +186,7 @@ mod tests {
             let api = test_api(store, false);
 
             let ret: Response<_> = api
-                .receive_settlement(id, SETTLEMENT_BODY)
+                .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 500);
@@ -203,7 +201,7 @@ mod tests {
             let api = test_api(store, false);
 
             let ret: Response<_> = api
-                .receive_settlement(id, SETTLEMENT_BODY)
+                .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
@@ -215,11 +213,12 @@ mod tests {
             let store = TestStore {
                 accounts: Arc::new(vec![]),
                 should_fail: false,
+                idempotency_keys: HashMap::new(),
             };
             let api = test_api(store, false);
 
             let ret: Response<_> = api
-                .receive_settlement(id, SETTLEMENT_BODY)
+                .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
@@ -267,6 +266,7 @@ mod tests {
             let store = TestStore {
                 accounts: Arc::new(vec![]),
                 should_fail: false,
+                idempotency_keys: HashMap::new(),
             };
             let api = test_api(store, true);
 
