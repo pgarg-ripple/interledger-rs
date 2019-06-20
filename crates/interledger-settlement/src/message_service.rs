@@ -48,7 +48,9 @@ where
             if request.prepare.destination() == settlement_engine_details.ilp_address {
                 let ilp_address_clone = self.ilp_address.clone();
                 let mut settlement_engine_url = settlement_engine_details.url;
-                // it is expected that the request's data is already in a proper
+                // The `Prepare` packet's data was sent by the peer's settlement
+                // engine so we assume it is in a format that our settlement engine
+                // will understand
                 // format. `to_vec()` needed to work around lifetime error
                 let message = request.prepare.data().to_vec();
 
