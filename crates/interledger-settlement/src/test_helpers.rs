@@ -67,7 +67,8 @@ impl IldcpAccount for TestAccount {
 pub struct TestStore {
     pub accounts: Arc<Vec<TestAccount>>,
     pub should_fail: bool,
-    pub idempotency_keys: HashMap<String, u64>,
+    pub idempotency_keys: HashMap<String, Vec<u8>>,
+    pub cache_hits: u64
 }
 
 impl SettlementStore for TestStore {
@@ -77,18 +78,32 @@ impl SettlementStore for TestStore {
         &mut self,
         _account_id: <Self::Account as Account>::AccountId,
         _amount: u64,
-        idempotency_key: String,
+        _idempotency_key: String,
     ) -> Box<Future<Item = (), Error = ()> + Send> {
-        // in the actual store this updates the database
-        // if the key is found, it skips the db update
-        // and returns early. here, we'll just check
-        // that the key count was incremented
-        let count = self.idempotency_keys
-            .entry(idempotency_key).or_insert(0);
-        *count += 1;
-
         let ret = if self.should_fail { err(()) } else { ok(()) };
         Box::new(ret)
+    }
+
+    fn load_idempotent_data(
+        &mut self,
+        idempotency_key: String,
+    ) -> Box<dyn Future<Item = Option<Vec<u8>>, Error = ()> + Send> {
+        let data = if let Some(data) = self.idempotency_keys.get(&idempotency_key) {
+            self.cache_hits += 1; // used to test how many times this branch gets executed
+            Some(data.to_vec())
+        } else {
+            None
+        };
+        Box::new(ok(data))
+    }
+
+    fn save_idempotent_data(
+        &mut self,
+        idempotency_key: String,
+        data: Vec<u8>, 
+    ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
+        self.idempotency_keys.insert(idempotency_key, data);
+        Box::new(ok(()))
     }
 }
 
@@ -114,6 +129,17 @@ impl AccountStore for TestStore {
             Box::new(ok(accounts))
         } else {
             Box::new(err(()))
+        }
+    }
+}
+
+impl TestStore {
+    pub fn new(accs: Vec<TestAccount>, should_fail: bool) -> Self {
+        TestStore {
+            accounts: Arc::new(accs),
+            should_fail,
+            idempotency_keys: HashMap::new(),
+            cache_hits: 0,
         }
     }
 }
@@ -179,11 +205,7 @@ pub fn test_store(store_fails: bool, account_has_engine: bool) -> TestStore {
     let mut acc = TEST_ACCOUNT_0.clone();
     acc.no_details = !account_has_engine;
 
-    TestStore {
-        accounts: Arc::new(vec![acc]),
-        should_fail: store_fails,
-        idempotency_keys: HashMap::new(),
-    }
+    TestStore::new(vec![acc], store_fails)
 }
 
 pub fn test_api(

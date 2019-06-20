@@ -1,6 +1,6 @@
 use super::{SettlementAccount, SettlementStore};
 use futures::{
-    future::{ok, result},
+    future::{ok, result, Either},
     Future,
 };
 use hyper::Response;
@@ -91,10 +91,23 @@ impl_web! {
         // Gets called by our settlement engine, forwards the request outwards
         // until it reaches the peer's settlement engine
         #[post("/accounts/:account_id/messages")]
-        fn send_outgoing_message(&self, account_id: String, body: Vec<u8>)-> impl Future<Item = Vec<u8>, Error = Response<()>> {
-            let store = self.store.clone();
+        fn send_outgoing_message(&self, account_id: String, body: Vec<u8>, idempotency_key: String)-> impl Future<Item = Vec<u8>, Error = Response<()>> {
+            let mut store: S = self.store.clone();
+            let mut store_clone = self.store.clone(); // TODO: Can we avoid these clones?
             let mut outgoing_handler = self.outgoing_handler.clone();
-            result(A::AccountId::from_str(&account_id)
+
+            // Check store for idempotency key. If exists, return cached data
+            store.load_idempotent_data(idempotency_key.clone())
+            .map_err(move |err| {
+                error!("Couldn't connecto to store {:?}", err);
+                Response::builder().status(500).body(()).unwrap()
+            }).and_then(move |data: Option<Vec<u8>>| {
+                if let Some(d) = data {
+                    return Either::A(ok(d))
+                }
+
+                return Either::B(
+                result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
                     error!("Unable to parse account id: {}", account_id);
                     Response::builder().status(400).body(()).unwrap()
@@ -136,9 +149,15 @@ impl_web! {
                         Response::builder().status(500).body(()).unwrap()
                     })
                 })
-                .and_then(|fulfill| {
-                    ok(fulfill.data().to_vec())
-                })
+                .and_then(move |fulfill| {
+                    let data = fulfill.data().to_vec();
+                    // Should this be and_then or spawn'ed?
+                    // Save the idempotency key and the data such that
+                    // the same response is returned
+                    store_clone.save_idempotent_data(idempotency_key, data.clone());
+                    ok(data)
+                }));
+            })
         }
     }
 }
@@ -210,11 +229,7 @@ mod tests {
         #[test]
         fn account_not_in_store() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
-            let store = TestStore {
-                accounts: Arc::new(vec![]),
-                should_fail: false,
-                idempotency_keys: HashMap::new(),
-            };
+            let store = TestStore::new(vec![], false);
             let api = test_api(store, false);
 
             let ret: Response<_> = api
@@ -234,7 +249,7 @@ mod tests {
             let store = test_store(false, true);
             let api = test_api(store, true);
 
-            let ret = api.send_outgoing_message(id, vec![]).wait().unwrap();
+            let ret = api.send_outgoing_message(id, vec![], IDEMPOTENCY.to_string()).wait().unwrap();
             assert_eq!(ret, b"hello!");
         }
 
@@ -244,7 +259,7 @@ mod tests {
             let store = test_store(false, true);
             let api = test_api(store, false);
 
-            let ret = api.send_outgoing_message(id, vec![]).wait().unwrap_err();
+            let ret = api.send_outgoing_message(id, vec![], IDEMPOTENCY.to_string()).wait().unwrap_err();
             assert_eq!(ret.status().as_u16(), 500);
         }
 
@@ -256,21 +271,17 @@ mod tests {
             let store = test_store(false, true);
             let api = test_api(store, true);
 
-            let ret: Response<_> = api.send_outgoing_message(id, vec![]).wait().unwrap_err();
+            let ret: Response<_> = api.send_outgoing_message(id, vec![], IDEMPOTENCY.to_string()).wait().unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
         }
 
         #[test]
         fn account_not_in_store() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
-            let store = TestStore {
-                accounts: Arc::new(vec![]),
-                should_fail: false,
-                idempotency_keys: HashMap::new(),
-            };
+            let store = TestStore::new(vec![], false);
             let api = test_api(store, true);
 
-            let ret: Response<_> = api.send_outgoing_message(id, vec![]).wait().unwrap_err();
+            let ret: Response<_> = api.send_outgoing_message(id, vec![], IDEMPOTENCY.to_string()).wait().unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
         }
 
