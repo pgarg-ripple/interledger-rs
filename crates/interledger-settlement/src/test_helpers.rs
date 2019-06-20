@@ -89,9 +89,11 @@ impl SettlementStore for TestStore {
         idempotency_key: String,
     ) -> Box<dyn Future<Item = Option<Vec<u8>>, Error = ()> + Send> {
         let data = if let Some(data) = self.idempotency_keys.get(&idempotency_key) {
+            println!("HIT CACHE!");
             self.cache_hits += 1; // used to test how many times this branch gets executed
             Some(data.to_vec())
         } else {
+            println!("CALLED BUT DID NOT HIT CACHE");
             None
         };
         Box::new(ok(data))
@@ -102,6 +104,7 @@ impl SettlementStore for TestStore {
         idempotency_key: String,
         data: Vec<u8>,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
+        println!("CACHING THE DATA");
         self.idempotency_keys.insert(idempotency_key, data);
         Box::new(ok(()))
     }
