@@ -52,5 +52,6 @@ pub trait SettlementStore {
         &self,
         account_id: <Self::Account as Account>::AccountId,
         amount: u64,
+        idempotency_key: String,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send>;
 }

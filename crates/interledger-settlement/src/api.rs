@@ -82,7 +82,7 @@ impl_web! {
                     // TODO Idempotency header!
                     // Return a 500 error if the balance could not be updated in
                     // the store
-                    store_clone.update_balance_for_incoming_settlement(account_id, amount)
+                    store_clone.update_balance_for_incoming_settlement(account_id, amount, "".to_string())
                         .map_err(move |_| {
                             error!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
                             Response::builder().status(500).body(()).unwrap()

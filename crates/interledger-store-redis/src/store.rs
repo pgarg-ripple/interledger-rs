@@ -105,7 +105,19 @@ return balance";
 static PROCESS_INCOMING_SETTLEMENT: &str = "
 local account = 'accounts:' .. ARGV[1]
 local amount = tonumber(ARGV[2])
+local idempotency_key = ARGV[3]
+
 local balance, prepaid_amount = unpack(redis.call('HMGET', account, 'balance', 'prepaid_amount'))
+
+-- If idempotency key has been used, then do not perform any operations
+local exists = redis.call('HGET', idempotency_key, 'set')
+if exists == '1' then
+    return balance
+end
+
+-- Otherwise, set it and make it expire after 24h (86400 sec)
+redis.call('HSET', idempotency_key, 'set', '1')
+redis.call('EXPIRE', idempotency_key, 86400)
 
 -- Credit the incoming settlement to the balance and/or prepaid amount,
 -- depending on whether that account currently owes money or not
@@ -1138,12 +1150,14 @@ impl SettlementStore for RedisStore {
         &self,
         account_id: u64,
         amount: u64,
+        idempotency_key: String,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
         Box::new(cmd("EVAL")
             .arg(PROCESS_INCOMING_SETTLEMENT)
             .arg(0)
             .arg(account_id)
             .arg(amount)
+            .arg(idempotency_key)
             .query_async(self.connection.as_ref().clone())
             .map_err(move |err| error!("Error processing incoming settlement from account: {} for amount: {}: {:?}", account_id, amount, err))
             .and_then(move |(_connection, balance): (_, i64)| {

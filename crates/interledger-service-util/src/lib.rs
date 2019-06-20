@@ -76,6 +76,10 @@ mod tests {
         assert_eq!(999u64.normalize_scale(6, 9), 0);
         assert_eq!(1000u64.normalize_scale(6, 9), 1);
         assert_eq!(1999u64.normalize_scale(6, 9), 1); // 5 is leftovers, maybe we should return it?
+
+        // allow making sub-sat micropayments
+        assert_eq!(1u64.normalize_scale(9, 18), 0);
+        assert_eq!(1_000_000_000u64.normalize_scale(9, 18), 1);
     }
 
     #[allow(clippy::float_cmp)]
