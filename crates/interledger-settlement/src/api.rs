@@ -257,6 +257,37 @@ mod tests {
         }
 
         #[test]
+        fn message_idempotent() {
+            let id = TEST_ACCOUNT_0.clone().id.to_string();
+            let store = test_store(false, true);
+            let api = test_api(store.clone(), true);
+
+            let ret = api
+                .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap();
+            assert_eq!(ret, b"hello!");
+            // This test fails because the store passed in the API is not the
+            // same store that's used by the send_outgoing_message function,
+            // since it clones inside. We'd have to make the API take a
+            // reference to the store, such that it's able to mutate it
+            // internally. Maybe an Arc<RwLock>?
+            // Note that this wouldn't fail if the store is some external
+            // process, and it only fails if the store is being run in memory,
+            // such as in this case.
+            // This call should hit the `load_idempotent_data` call, and
+            // increase the test store's cache hits.
+            let ret2 = api
+                .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap();
+            assert_eq!(ret2, b"hello!");
+            assert_eq!(store.idempotency_keys.get(&IDEMPOTENCY.to_string()).unwrap(), b"hello");
+            assert_eq!(store.cache_hits, 1);
+        }
+
+
+        #[test]
         fn message_gets_rejected() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
             let store = test_store(false, true);
