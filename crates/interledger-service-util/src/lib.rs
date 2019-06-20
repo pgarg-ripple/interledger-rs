@@ -25,7 +25,7 @@ pub use self::rate_limit_service::{
 };
 pub use self::validator_service::ValidatorService;
 
-/// Traits for u64 and f64 asset code conversions for amounts and rates 
+/// Traits for u64 and f64 asset code conversions for amounts and rates
 pub trait Convert {
     fn normalize_scale(&self, from_scale: u8, to_scale: u8) -> Self;
 }
@@ -62,7 +62,7 @@ mod tests {
         // 1 unit with base 10, is 10 units with base 1
         assert_eq!(1u64.normalize_scale(2, 1), 10);
         // 1 wei is 1e9 sats (multiplied by rate)
-        assert_eq!(1u64.normalize_scale(18, 9), 1000000000);
+        assert_eq!(1u64.normalize_scale(18, 9), 1_000_000_000);
 
         // there's leftovers for all number slots which do not increase in
         // increments of 10^{to_scale-from_scale}
@@ -78,6 +78,7 @@ mod tests {
         assert_eq!(1999u64.normalize_scale(6, 9), 1); // 5 is leftovers, maybe we should return it?
     }
 
+    #[allow(clippy::float_cmp)]
     #[test]
     fn f64_test() {
         // 1 unit with base 1, is 1 unit with base 1
@@ -85,7 +86,7 @@ mod tests {
         // 1 unit with base 10, is 10 units with base 1
         assert_eq!(1f64.normalize_scale(2, 1), 10.0);
         // 1 wei is 1e9 sats (multiplied by rate)
-        assert_eq!(1f64.normalize_scale(18, 9), 1000000000.0);
+        assert_eq!(1f64.normalize_scale(18, 9), 1_000_000_000.0);
 
         // 1.0 unit with base 1 is 0.1 unit with base 2
         assert_eq!(1f64.normalize_scale(1, 2), 0.1);
