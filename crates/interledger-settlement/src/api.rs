@@ -106,7 +106,7 @@ impl_web! {
                     return Either::A(ok(d))
                 }
 
-                return Either::B(
+                Either::B(
                 result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
                     error!("Unable to parse account id: {}", account_id);
@@ -156,7 +156,7 @@ impl_web! {
                     // the same response is returned
                     store_clone.save_idempotent_data(idempotency_key, data.clone());
                     ok(data)
-                }));
+                }))
             })
         }
     }
@@ -167,8 +167,6 @@ mod tests {
     use super::*;
     use crate::fixtures::*;
     use crate::test_helpers::*;
-    use std::sync::Arc;
-    use std::collections::HashMap;
 
     // Settlement Tests
 
@@ -181,7 +179,9 @@ mod tests {
             let store = test_store(false, true);
             let api = test_api(store, false);
 
-            let ret = api.receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string()).wait();
+            let ret = api
+                .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
+                .wait();
             assert!(ret.is_ok());
         }
 
@@ -249,7 +249,10 @@ mod tests {
             let store = test_store(false, true);
             let api = test_api(store, true);
 
-            let ret = api.send_outgoing_message(id, vec![], IDEMPOTENCY.to_string()).wait().unwrap();
+            let ret = api
+                .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap();
             assert_eq!(ret, b"hello!");
         }
 
@@ -259,7 +262,10 @@ mod tests {
             let store = test_store(false, true);
             let api = test_api(store, false);
 
-            let ret = api.send_outgoing_message(id, vec![], IDEMPOTENCY.to_string()).wait().unwrap_err();
+            let ret = api
+                .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap_err();
             assert_eq!(ret.status().as_u16(), 500);
         }
 
@@ -271,7 +277,10 @@ mod tests {
             let store = test_store(false, true);
             let api = test_api(store, true);
 
-            let ret: Response<_> = api.send_outgoing_message(id, vec![], IDEMPOTENCY.to_string()).wait().unwrap_err();
+            let ret: Response<_> = api
+                .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
         }
 
@@ -281,7 +290,10 @@ mod tests {
             let store = TestStore::new(vec![], false);
             let api = test_api(store, true);
 
-            let ret: Response<_> = api.send_outgoing_message(id, vec![], IDEMPOTENCY.to_string()).wait().unwrap_err();
+            let ret: Response<_> = api
+                .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
         }
 

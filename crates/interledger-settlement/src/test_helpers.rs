@@ -14,11 +14,11 @@ use interledger_packet::{Address, ErrorCode, FulfillBuilder, RejectBuilder};
 use mockito::mock;
 
 use crate::fixtures::{BODY, MESSAGES_API, SERVICE_ADDRESS, SETTLEMENT_API, TEST_ACCOUNT_0};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use url::Url;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct TestAccount {
@@ -68,7 +68,7 @@ pub struct TestStore {
     pub accounts: Arc<Vec<TestAccount>>,
     pub should_fail: bool,
     pub idempotency_keys: HashMap<String, Vec<u8>>,
-    pub cache_hits: u64
+    pub cache_hits: u64,
 }
 
 impl SettlementStore for TestStore {
@@ -100,7 +100,7 @@ impl SettlementStore for TestStore {
     fn save_idempotent_data(
         &mut self,
         idempotency_key: String,
-        data: Vec<u8>, 
+        data: Vec<u8>,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
         self.idempotency_keys.insert(idempotency_key, data);
         Box::new(ok(()))

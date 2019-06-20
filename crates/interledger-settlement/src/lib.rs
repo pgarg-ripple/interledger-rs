@@ -72,6 +72,6 @@ pub trait SettlementStore {
     fn save_idempotent_data(
         &mut self,
         idempotency_key: String,
-        data: Vec<u8>, 
+        data: Vec<u8>,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send>;
 }
