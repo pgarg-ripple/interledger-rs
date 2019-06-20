@@ -115,7 +115,8 @@ if exists == '1' then
     return balance + prepaid_amount
 end
 
--- Otherwise, set it and make it expire after 24h (86400 sec)
+-- Otherwise, set it to true (there's no value to cached as a response)
+-- and make it expire after 24h (86400 sec)
 redis.call('HSET', idempotency_key, 'set', '1')
 redis.call('EXPIRE', idempotency_key, 86400)
 
@@ -1145,6 +1146,81 @@ impl RateLimitStore for RedisStore {
 
 impl SettlementStore for RedisStore {
     type Account = Account;
+
+    fn load_idempotent_data(
+        &mut self,
+        idempotency_key: String,
+    ) -> Box<dyn Future<Item = Option<Vec<u8>>, Error = ()> + Send> {
+        let idempotency_key_clone = idempotency_key.clone();
+        Box::new(
+            cmd("HGET")
+                .arg(idempotency_key.clone())
+                .arg("value")
+                .query_async(self.connection.as_ref().clone())
+                .map_err(move |err| {
+                    error!(
+                        "Error loading idempotency key {}: {:?}",
+                        idempotency_key_clone, err
+                    )
+                })
+                .and_then(move |(_connection, data): (_, Option<Vec<u8>>)| {
+                    trace!(
+                        "Loaded idempotency key {} - value {:?}",
+                        idempotency_key,
+                        data
+                    );
+                    Ok(data)
+                }),
+        )
+    }
+
+    fn save_idempotent_data(
+        &mut self,
+        idempotency_key: String,
+        data: Vec<u8>,
+    ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
+        // TODO: Replace these clones with something smarter.
+        let idempotency_key_clone = idempotency_key.clone();
+        let idempotency_key_clone2 = idempotency_key.clone();
+        let data_clone = data.clone();
+        Box::new(
+            cmd("HSET")
+                .arg(idempotency_key.clone())
+                .arg("value")
+                .arg(data.clone())
+                .query_async(self.connection.as_ref().clone())
+                .map_err(move |err| {
+                    error!(
+                        "Error caching idempotency key {} to value {:?}: {:?}",
+                        idempotency_key_clone, data_clone, err
+                    )
+                })
+                .and_then(move |(connection, _balance): (_, i64)| {
+                    trace!(
+                        "Cached idempotency key {} to value {:?}",
+                        idempotency_key,
+                        data
+                    );
+                    cmd("EXPIRE")
+                        .arg(idempotency_key_clone2.clone())
+                        .arg(86400) // 1 day
+                        .query_async(connection)
+                        .map_err(move |err| {
+                            error!(
+                                "Error caching idempotency key {} to value {:?}: {:?}",
+                                idempotency_key, data, err
+                            )
+                        })
+                        .and_then(move |(_connection, _bal): (_, i64)| {
+                            trace!(
+                                "Idempotency key {} will expire in 1 day",
+                                idempotency_key_clone2
+                            );
+                            Ok(())
+                        })
+                }),
+        )
+    }
 
     fn update_balance_for_incoming_settlement(
         &mut self,

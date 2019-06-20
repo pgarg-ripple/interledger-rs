@@ -99,7 +99,7 @@ impl_web! {
             // Check store for idempotency key. If exists, return cached data
             store.load_idempotent_data(idempotency_key.clone())
             .map_err(move |err| {
-                error!("Couldn't connecto to store {:?}", err);
+                error!("Couldn't connect to store {:?}", err);
                 Response::builder().status(500).body(()).unwrap()
             }).and_then(move |data: Option<Vec<u8>>| {
                 if let Some(d) = data {

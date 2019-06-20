@@ -37,6 +37,34 @@ fn credits_prepaid_amount() {
 }
 
 #[test]
+fn saves_and_loads_idempotency_key_data_properly() {
+    block_on(test_store().and_then(|(mut store, context)| {
+        store
+            .save_idempotent_data(IDEMPOTENCY_KEY.clone(), b"TEST".to_vec())
+            .map_err(|err| eprintln!("Redis error: {:?}", err))
+            .and_then(move |_| {
+                store
+                    .load_idempotent_data(IDEMPOTENCY_KEY.clone())
+                    .map_err(|err| eprintln!("Redis error: {:?}", err))
+                    .and_then(move |data1| {
+                        assert_eq!(data1.unwrap(), b"TEST".to_vec());
+                        let _ = context;
+
+                        store
+                            .load_idempotent_data("asdf".to_string())
+                            .map_err(|err| eprintln!("Redis error: {:?}", err))
+                            .and_then(move |data2| {
+                                assert!(data2.is_none());
+                                let _ = context;
+                                Ok(())
+                            })
+                    })
+            })
+    }))
+    .unwrap()
+}
+
+#[test]
 fn idempotent_settlement_calls() {
     block_on(test_store().and_then(|(mut store, context)| {
         context.async_connection().and_then(move |conn| {
