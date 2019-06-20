@@ -178,34 +178,27 @@ pub fn test_store(store_fails: bool, account_has_engine: bool) -> TestStore {
     }
 }
 
-pub fn test_api_settle(
+pub fn test_api(
     test_store: TestStore,
+    should_fulfill: bool,
 ) -> SettlementApi<TestStore, impl OutgoingService<TestAccount> + Clone + Send + Sync, TestAccount>
 {
-    let outgoing = outgoing_service_fn(|_request| {
-        Box::new(err(RejectBuilder {
-            code: ErrorCode::F02_UNREACHABLE,
-            message: b"No other outgoing handler!",
-            data: &[],
-            triggered_by: Some(&SERVICE_ADDRESS),
+    let outgoing = outgoing_service_fn(move |_| Box::new(
+        if should_fulfill {
+            ok(FulfillBuilder {
+                fulfillment: &[0; 32],
+                data: b"hello!",
+            }
+            .build())
+        } else {
+            err(RejectBuilder {
+                code: ErrorCode::F02_UNREACHABLE,
+                message: b"No other outgoing handler!",
+                data: &[],
+                triggered_by: Some(&SERVICE_ADDRESS),
+            }
+            .build())
         }
-        .build()))
-    });
-
-    SettlementApi::new(test_store, outgoing)
-}
-
-pub fn test_api_message(
-    test_store: TestStore,
-) -> SettlementApi<TestStore, impl OutgoingService<TestAccount> + Clone + Send + Sync, TestAccount>
-{
-    let outgoing = outgoing_service_fn(|_request| {
-        Box::new(ok(FulfillBuilder {
-            fulfillment: &[0; 32],
-            data: b"hello!",
-        }
-        .build()))
-    });
-
+    ));
     SettlementApi::new(test_store, outgoing)
 }

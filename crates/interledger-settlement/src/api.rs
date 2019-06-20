@@ -112,7 +112,7 @@ impl_web! {
             result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
                     error!("Unable to parse account id: {}", account_id);
-                    Response::builder().status(404).body(()).unwrap()
+                    Response::builder().status(400).body(()).unwrap()
                 }))
                 .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_| {
                     error!("Error getting account: {}", account_id);
@@ -148,8 +148,7 @@ impl_web! {
                     })
                     .map_err(|reject| {
                         error!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
-                        // spec: "Could not process sending of the message -> 400"
-                        Response::builder().status(400).body(()).unwrap()
+                        Response::builder().status(500).body(()).unwrap()
                     })
                 })
                 .and_then(|fulfill| {
@@ -168,82 +167,124 @@ mod tests {
 
     // Settlement Tests
 
-    #[test]
-    fn settlement_ok() {
-        let id = TEST_ACCOUNT_0.clone().id.to_string();
-        let store = test_store(false, true);
-        let api = test_api_settle(store);
+    mod settlement_tests {
+        use super::*;
 
-        let ret = api.receive_settlement(id, SETTLEMENT_BODY).wait();
-        assert!(ret.is_ok());
+        #[test]
+        fn settlement_ok() {
+            let id = TEST_ACCOUNT_0.clone().id.to_string();
+            let store = test_store(false, true);
+            let api = test_api(store, false);
+
+            let ret = api.receive_settlement(id, SETTLEMENT_BODY).wait();
+            assert!(ret.is_ok());
+        }
+
+        #[test]
+        fn account_has_no_engine_configured() {
+            let id = TEST_ACCOUNT_0.clone().id.to_string();
+            let store = test_store(false, false);
+            let api = test_api(store, false);
+
+            let ret = api
+                .receive_settlement(id, SETTLEMENT_BODY)
+                .wait()
+                .unwrap_err();
+            assert_eq!(ret.status().as_u16(), 404);
+        }
+
+        #[test]
+        fn update_balance_for_incoming_settlement_fails() {
+            let id = TEST_ACCOUNT_0.clone().id.to_string();
+            let store = test_store(true, true);
+            let api = test_api(store, false);
+
+            let ret: Response<_> = api
+                .receive_settlement(id, SETTLEMENT_BODY)
+                .wait()
+                .unwrap_err();
+            assert_eq!(ret.status().as_u16(), 500);
+        }
+
+        #[test]
+        fn invalid_account_id() {
+            // the api is configured to take an accountId type
+            // supplying an id that cannot be parsed to that type must fail
+            let id = "a".to_string();
+            let store = test_store(false, true);
+            let api = test_api(store, false);
+
+            let ret: Response<_> = api
+                .receive_settlement(id, SETTLEMENT_BODY)
+                .wait()
+                .unwrap_err();
+            assert_eq!(ret.status().as_u16(), 400);
+        }
+
+        #[test]
+        fn account_not_in_store() {
+            let id = TEST_ACCOUNT_0.clone().id.to_string();
+            let store = TestStore {
+                accounts: Arc::new(vec![]),
+                should_fail: false,
+            };
+            let api = test_api(store, false);
+
+            let ret: Response<_> = api
+                .receive_settlement(id, SETTLEMENT_BODY)
+                .wait()
+                .unwrap_err();
+            assert_eq!(ret.status().as_u16(), 404);
+        }
     }
 
-    #[test]
-    fn account_has_no_engine_configured() {
-        let id = TEST_ACCOUNT_0.clone().id.to_string();
-        let store = test_store(false, false);
-        let api = test_api_settle(store);
+    mod message_tests {
+        use super::*;
 
-        let ret = api
-            .receive_settlement(id, SETTLEMENT_BODY)
-            .wait()
-            .unwrap_err();
-        assert_eq!(ret.status().as_u16(), 404);
-    }
+        #[test]
+        fn message_ok() {
+            let id = TEST_ACCOUNT_0.clone().id.to_string();
+            let store = test_store(false, true);
+            let api = test_api(store, true);
 
-    #[test]
-    fn update_balance_for_incoming_settlement_fails() {
-        let id = TEST_ACCOUNT_0.clone().id.to_string();
-        let store = test_store(true, true);
-        let api = test_api_settle(store);
+            let ret = api.send_outgoing_message(id, vec![]).wait().unwrap();
+            assert_eq!(ret, b"hello!");
+        }
 
-        let ret: Response<_> = api
-            .receive_settlement(id, SETTLEMENT_BODY)
-            .wait()
-            .unwrap_err();
-        assert_eq!(ret.status().as_u16(), 500);
-    }
+        #[test]
+        fn message_gets_rejected() {
+            let id = TEST_ACCOUNT_0.clone().id.to_string();
+            let store = test_store(false, true);
+            let api = test_api(store, false);
 
-    #[test]
-    fn invalid_account_id() {
-        // the api is configured to take an accountId type
-        // supplying an id that cannot be parsed to that type must fail
-        let id = "a".to_string();
-        let store = test_store(false, true);
-        let api = test_api_settle(store);
+            let ret = api.send_outgoing_message(id, vec![]).wait().unwrap_err();
+            assert_eq!(ret.status().as_u16(), 500);
+        }
 
-        let ret: Response<_> = api
-            .receive_settlement(id, SETTLEMENT_BODY)
-            .wait()
-            .unwrap_err();
-        assert_eq!(ret.status().as_u16(), 400);
-    }
+        #[test]
+        fn invalid_account_id() {
+            // the api is configured to take an accountId type
+            // supplying an id that cannot be parsed to that type must fail
+            let id = "a".to_string();
+            let store = test_store(false, true);
+            let api = test_api(store, true);
 
-    #[test]
-    fn account_not_in_store() {
-        let id = TEST_ACCOUNT_0.clone().id.to_string();
-        let store = TestStore {
-            accounts: Arc::new(vec![]),
-            should_fail: false,
-        };
-        let api = test_api_settle(store);
+            let ret: Response<_> = api.send_outgoing_message(id, vec![]).wait().unwrap_err();
+            assert_eq!(ret.status().as_u16(), 400);
+        }
 
-        let ret: Response<_> = api
-            .receive_settlement(id, SETTLEMENT_BODY)
-            .wait()
-            .unwrap_err();
-        assert_eq!(ret.status().as_u16(), 404);
-    }
+        #[test]
+        fn account_not_in_store() {
+            let id = TEST_ACCOUNT_0.clone().id.to_string();
+            let store = TestStore {
+                accounts: Arc::new(vec![]),
+                should_fail: false,
+            };
+            let api = test_api(store, true);
 
-    // Message Tests
+            let ret: Response<_> = api.send_outgoing_message(id, vec![]).wait().unwrap_err();
+            assert_eq!(ret.status().as_u16(), 404);
+        }
 
-    #[test]
-    fn message_ok() {
-        let id = TEST_ACCOUNT_0.clone().id.to_string();
-        let store = test_store(false, true);
-        let api = test_api_message(store);
-
-        let ret = api.send_outgoing_message(id, vec![]).wait().unwrap();
-        assert_eq!(ret, b"hello!");
     }
 }
