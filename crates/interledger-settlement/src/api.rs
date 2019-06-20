@@ -1,4 +1,4 @@
-use crate::{SettlementAccount, SettlementStore};
+use super::{SettlementAccount, SettlementStore};
 use futures::{
     future::{ok, result},
     Future,
@@ -7,6 +7,7 @@ use hyper::Response;
 use interledger_ildcp::IldcpAccount;
 use interledger_packet::PrepareBuilder;
 use interledger_service::{AccountStore, OutgoingRequest, OutgoingService};
+use interledger_service_util::Convert;
 use std::{
     marker::PhantomData,
     str::{self, FromStr},
@@ -75,21 +76,8 @@ impl_web! {
                     }
                 })
                 .and_then(move |(account, settlement_engine)| {
-                    let account_id = account.id(); // Get the account_id back
-
-                    // TODO: Extract into a method since this is used in
-                    // client.rs as well as the exchange_rates.rs service
-                    let amount = if account.asset_scale() >= settlement_engine.asset_scale {
-                        amount
-                            * 10u64.pow(u32::from(
-                                account.asset_scale() - settlement_engine.asset_scale,
-                            ))
-                    } else {
-                        amount
-                            / 10u64.pow(u32::from(
-                                settlement_engine.asset_scale - account.asset_scale(),
-                            ))
-                    };
+                    let account_id = account.id();
+                    let amount = amount.normalize_scale(account.asset_scale(), settlement_engine.asset_scale);
 
                     // TODO Idempotency header!
                     // Return a 500 error if the balance could not be updated in
