@@ -67,7 +67,7 @@ impl IldcpAccount for TestAccount {
 pub struct TestStore {
     pub accounts: Arc<Vec<TestAccount>>,
     pub should_fail: bool,
-    pub idempotency_keys: HashMap<String, Vec<u8>>,
+    pub cache: HashMap<String, (StatusCode, Bytes)>,
     pub cache_hits: u64,
 }
 
@@ -87,25 +87,26 @@ impl SettlementStore for TestStore {
     fn load_idempotent_data(
         &mut self,
         idempotency_key: String,
-    ) -> Box<dyn Future<Item = Option<Vec<u8>>, Error = ()> + Send> {
-        let data = if let Some(data) = self.idempotency_keys.get(&idempotency_key) {
+    ) -> Box<dyn Future<Item = Option<(StatusCode, Bytes)>, Error = ()> + Send> {
+        let d = if let Some(data) = self.cache.get(&idempotency_key) {
             println!("HIT CACHE!");
             self.cache_hits += 1; // used to test how many times this branch gets executed
-            Some(data.to_vec())
+            Some((data.0, data.1.clone()))
         } else {
             println!("CALLED BUT DID NOT HIT CACHE");
             None
         };
-        Box::new(ok(data))
+        Box::new(ok(d))
     }
 
     fn save_idempotent_data(
         &mut self,
         idempotency_key: String,
-        data: Vec<u8>,
+        status_code: StatusCode,
+        data: Bytes,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
         println!("CACHING THE DATA");
-        self.idempotency_keys.insert(idempotency_key, data);
+        self.cache.insert(idempotency_key, (status_code, data));
         Box::new(ok(()))
     }
 }
@@ -141,7 +142,7 @@ impl TestStore {
         TestStore {
             accounts: Arc::new(accs),
             should_fail,
-            idempotency_keys: HashMap::new(),
+            cache: HashMap::new(),
             cache_hits: 0,
         }
     }

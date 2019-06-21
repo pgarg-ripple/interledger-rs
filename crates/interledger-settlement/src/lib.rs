@@ -8,7 +8,9 @@ extern crate tower_web;
 #[cfg(test)]
 extern crate lazy_static;
 
+use bytes::Bytes;
 use futures::Future;
+use hyper::StatusCode;
 use interledger_packet::Address;
 use interledger_service::Account;
 use url::Url;
@@ -64,7 +66,7 @@ pub trait SettlementStore {
     fn load_idempotent_data(
         &mut self,
         idempotency_key: String,
-    ) -> Box<dyn Future<Item = Option<Vec<u8>>, Error = ()> + Send>;
+    ) -> Box<dyn Future<Item = Option<(StatusCode, Bytes)>, Error = ()> + Send>;
 
     /// Saves the data that was passed along with the api request for later
     /// Takes mutable reference to self because the store's fields may be
@@ -72,6 +74,7 @@ pub trait SettlementStore {
     fn save_idempotent_data(
         &mut self,
         idempotency_key: String,
-        data: Vec<u8>,
+        status_code: StatusCode,
+        data: Bytes,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send>;
 }
