@@ -1,7 +1,7 @@
 use super::{SettlementAccount, SettlementStore};
 use bytes::Bytes;
 use futures::{
-    future::{err, ok, result, Either},
+    future::{ok, result, Either},
     Future,
 };
 use hyper::{Response, StatusCode};
@@ -68,7 +68,7 @@ impl_web! {
             // Can we remove them in some smart way?
             // https://github.com/rust-lang/rfcs/issues/2407
             // https://users.rust-lang.org/t/automatic-cloning-for-closures/2578
-            // Tried enclose macro, doesn't behave well with future chains
+            // Tried `enclose` macro, doesn't behave well with future chains
 
             let store = Arc::clone(&self.store);
 
@@ -82,7 +82,7 @@ impl_web! {
             }).and_then(move |data: Option<(StatusCode, Bytes)>| {
                 if let Some(d) = data {
                     let data = Response::builder().status(d.0).body(d.1).unwrap();
-                    // TODO: Make the else branch return a `err`. This will make
+                    // TODO: Make the else branch return a `err` instead of ok. This will make
                     // it impossible to `unwrap` on an error (check idempotency
                     // tests that `unwrap_err` when the function is first called,
                     // but on the cached response they just `unwrap`.)
@@ -111,9 +111,8 @@ impl_web! {
 
                             let status_code = StatusCode::from_u16(404).unwrap();
                             let data = Bytes::from(error_msg.clone());
-                            // save the idempotency data, can do .wait() here? .then /
-                            // .and_then handling of the future resulted in type
-                            // mismatch errors with the next future.
+                            // Should we cache this case? What if between two
+                            // API calls the account store changes?
                             let _ret = store.write().save_idempotent_data(idempotency_key.clone(), status_code, data).wait();
                             Response::builder().status(404).body(error_msg).unwrap()
                         }})
@@ -125,8 +124,7 @@ impl_web! {
                         } else {
                             let error_msg = format!("Account {} does not have settlement engine details configured. Cannot handle incoming settlement", account.id());
                             error!("{}", error_msg);
-                            let _ret = store.write().save_idempotent_data(idempotency_key, StatusCode::from_u16(404).unwrap(), Bytes::from(error_msg.clone()))
-                            .wait();
+                            let _ret = store.write().save_idempotent_data(idempotency_key, StatusCode::from_u16(404).unwrap(), Bytes::from(error_msg.clone())).wait();
                             Err(Response::builder().status(404).body(error_msg).unwrap())
                         }
                     }})
@@ -158,7 +156,6 @@ impl_web! {
         #[post("/accounts/:account_id/messages")]
         fn send_outgoing_message(&self, account_id: String, body: Vec<u8>, idempotency_key: String)-> impl Future<Item = Response<Bytes>, Error = Response<String>> {
             let store = self.store.clone();
-            let store_clone = self.store.clone();
             let mut outgoing_handler = self.outgoing_handler.clone();
 
             // Check store for idempotency key. If exists, return cached data
@@ -175,16 +172,29 @@ impl_web! {
 
                 Either::B(
                 result(A::AccountId::from_str(&account_id)
-                .map_err(move |_err| {
-                    let err = format!("Unable to parse account id: {}", account_id);
-                    error!("{}", err);
-                    Response::builder().status(400).body(err).unwrap()
-                }))
-                .and_then(move |account_id| store.read().get_accounts(vec![account_id]).map_err(move |_| {
-                    let err = format!("Error getting account: {}", account_id);
-                    error!("{}", err);
-                    Response::builder().status(404).body(err).unwrap()
-                }))
+                .map_err({ clone_all!(store, idempotency_key); move |_err| {
+                    let error_msg = format!("Unable to parse account id: {}", account_id);
+                    error!("{}", error_msg);
+                    let status_code = StatusCode::from_u16(400).unwrap();
+                    let data = Bytes::from(error_msg.clone());
+                    // save the idempotency data, can do .wait() here? .then /
+                    // .and_then handling of the future resulted in type
+                    // mismatch errors with the next future.
+                    let _ret = store.write().save_idempotent_data(idempotency_key, status_code, data).wait();
+                    Response::builder().status(400).body(error_msg).unwrap()
+                }}))
+                .and_then({clone_all!(store, idempotency_key); move |account_id| store.read().get_accounts(vec![account_id])
+                .map_err({clone_all!(store, idempotency_key); move |_| {
+                    let error_msg = format!("Error getting account: {}", account_id);
+                    error!("{}", error_msg);
+                    let status_code = StatusCode::from_u16(404).unwrap();
+                    let data = Bytes::from(error_msg.clone());
+                    // save the idempotency data, can do .wait() here? .then /
+                    // .and_then handling of the future resulted in type
+                    // mismatch errors with the next future.
+                    let _ret = store.write().save_idempotent_data(idempotency_key, status_code, data).wait();
+                    Response::builder().status(404).body(error_msg).unwrap()
+                }})})
                 .and_then(|accounts| {
                     let account = &accounts[0];
                     if let Some(settlement_engine) = account.settlement_engine_details() {
@@ -195,7 +205,7 @@ impl_web! {
                         Err(Response::builder().status(404).body(err).unwrap())
                     }
                 })
-                .and_then(move |(account, settlement_engine)| {
+                .and_then({ clone_all!(store, idempotency_key) ;move |(account, settlement_engine)| {
                     // Send the message to the peer's settlement engine.
                     // Note that we use dummy values for the `from` and `original_amount`
                     // because this `OutgoingRequest` will bypass the router and thus will not
@@ -214,15 +224,16 @@ impl_web! {
                             execution_condition: &PEER_PROTOCOL_CONDITION,
                         }.build()
                     })
-                    .map_err(|reject| {
-                        let err = format!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
-                        error!("{}", err);
-                        Response::builder().status(502).body(err).unwrap()
-                    })
-                })
-                .and_then(move |fulfill| {
+                    .map_err({ clone_all!(store, idempotency_key); move |reject| {
+                        let error_msg = format!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
+                        error!("{}", error_msg);
+                        let _ret = store.write().save_idempotent_data(idempotency_key, StatusCode::from_u16(502).unwrap(), Bytes::from(error_msg.clone())).wait();
+                        Response::builder().status(502).body(error_msg).unwrap()
+                    }})
+                }})
+                .and_then({ clone_all!(store, idempotency_key); move |fulfill| {
                     let data = Bytes::from(fulfill.data());
-                    store_clone.write().save_idempotent_data(idempotency_key, StatusCode::OK, data.clone())
+                    store.write().save_idempotent_data(idempotency_key, StatusCode::OK, data.clone())
                     .map_err(move |err| {
                         let err = format!("Couldn't connect to store {:?}", err);
                         error!("{}", err);
@@ -231,7 +242,7 @@ impl_web! {
                     .and_then(|_| Ok(
                         Response::builder().status(200).body(data).unwrap()
                     ))
-                })
+                }})
             )})
         }
     }
@@ -292,8 +303,7 @@ mod tests {
             assert_eq!(ret.status().as_u16(), 404);
             assert_eq!(ret.body(), "Account 0 does not have settlement engine details configured. Cannot handle incoming settlement");
 
-            // check idempotency
-
+            // check that it's idempotent
             let ret: Response<_> = api
                 .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
                 .wait()
@@ -339,20 +349,25 @@ mod tests {
             assert_eq!(ret.status().as_u16(), 400);
             assert_eq!(ret.body(), "Unable to parse account id: a");
 
+            // check that it's idempotent
             let ret: Response<_> = api
-                .receive_settlement(id, 999, IDEMPOTENCY.to_string())
+                .receive_settlement(id.clone(), 999, IDEMPOTENCY.to_string())
                 .wait()
                 .unwrap();
             assert_eq!(ret.status().as_u16(), 400);
             assert_eq!(ret.body(), "Unable to parse account id: a");
 
-            // check that it's idempotent
+            let _ret: Response<_> = api
+                .receive_settlement(id, 999, IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap();
+
             let s = store.read();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
 
             let cache_hits = s.cache_hits.read();
-            assert_eq!(*cache_hits, 1);
+            assert_eq!(*cache_hits, 2);
             assert_eq!(cached_data.0, 400);
             assert_eq!(cached_data.1, &Bytes::from("Unable to parse account id: a"));
         }
@@ -361,13 +376,29 @@ mod tests {
         fn account_not_in_store() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
             let store = Arc::new(RwLock::new(TestStore::new(vec![], false)));
-            let api = test_api(store, false);
+            let api = test_api(store.clone(), false);
+
+            let ret: Response<_> = api
+                .receive_settlement(id.clone(), SETTLEMENT_BODY, IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap_err();
+            assert_eq!(ret.status().as_u16(), 404);
+            assert_eq!(ret.body(), "Error getting account: 0");
 
             let ret: Response<_> = api
                 .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap_err();
+                .unwrap(); // Bug that returns Result::OK
             assert_eq!(ret.status().as_u16(), 404);
+            assert_eq!(ret.body(), "Error getting account: 0");
+
+            let s = store.read();
+            let cache = s.cache.read();
+            let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
+            let cache_hits = s.cache_hits.read();
+            assert_eq!(*cache_hits, 1);
+            assert_eq!(cached_data.0, 404);
+            assert_eq!(cached_data.1, &Bytes::from("Error getting account: 0"));
         }
     }
 
@@ -378,20 +409,6 @@ mod tests {
         fn message_ok() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
             let store = test_store(false, true);
-            let api = test_api(store, true);
-
-            let ret: Response<_> = api
-                .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
-                .wait()
-                .unwrap();
-            assert_eq!(ret.status(), StatusCode::OK);
-            assert_eq!(ret.body(), &Bytes::from("hello!"));
-        }
-
-        #[test]
-        fn message_idempotent() {
-            let id = TEST_ACCOUNT_0.clone().id.to_string();
-            let store = test_store(false, true);
             let api = test_api(store.clone(), true);
 
             let ret: Response<_> = api
@@ -400,17 +417,17 @@ mod tests {
                 .unwrap();
             assert_eq!(ret.status(), StatusCode::OK);
             assert_eq!(ret.body(), &Bytes::from("hello!"));
-            let ret2 = api
+
+            let ret: Response<_> = api
                 .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
                 .wait()
                 .unwrap();
-            assert_eq!(ret2.status(), StatusCode::OK);
-            assert_eq!(ret2.body(), &Bytes::from("hello!"));
+            assert_eq!(ret.status(), StatusCode::OK);
+            assert_eq!(ret.body(), &Bytes::from("hello!"));
 
             let s = store.read();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
-
             let cache_hits = s.cache_hits.read();
             assert_eq!(*cache_hits, 1);
             assert_eq!(cached_data.0, StatusCode::OK);
@@ -421,13 +438,27 @@ mod tests {
         fn message_gets_rejected() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
             let store = test_store(false, true);
-            let api = test_api(store, false);
+            let api = test_api(store.clone(), false);
+
+            let ret = api
+                .send_outgoing_message(id.clone(), vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap_err();
+            assert_eq!(ret.status().as_u16(), 502);
 
             let ret = api
                 .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap_err();
+                .unwrap(); // error code bug in if/else
             assert_eq!(ret.status().as_u16(), 502);
+
+            let s = store.read();
+            let cache = s.cache.read();
+            let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
+            let cache_hits = s.cache_hits.read();
+            assert_eq!(*cache_hits, 1);
+            assert_eq!(cached_data.0, 502);
+            assert_eq!(cached_data.1, &Bytes::from("Error sending message to peer settlement engine. Packet rejected with code: F02, message: No other outgoing handler!"));
         }
 
         #[test]
@@ -436,26 +467,62 @@ mod tests {
             // supplying an id that cannot be parsed to that type must fail
             let id = "a".to_string();
             let store = test_store(false, true);
-            let api = test_api(store, true);
+            let api = test_api(store.clone(), true);
 
             let ret: Response<_> = api
-                .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
+                .send_outgoing_message(id.clone(), vec![], IDEMPOTENCY.to_string())
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
+
+            let ret: Response<_> = api
+                .send_outgoing_message(id.clone(), vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap(); // RETURN OK BUG WHEN IT SHOULD ERR
+            assert_eq!(ret.status().as_u16(), 400);
+
+            let _ret: Response<_> = api
+                .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap(); // RETURN OK BUG WHEN IT SHOULD ERR
+            assert_eq!(ret.status().as_u16(), 400);
+
+            let s = store.read();
+            let cache = s.cache.read();
+            let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
+
+            let cache_hits = s.cache_hits.read();
+            assert_eq!(*cache_hits, 2);
+            assert_eq!(cached_data.0, 400);
+            assert_eq!(cached_data.1, &Bytes::from("Unable to parse account id: a"));
         }
 
         #[test]
         fn account_not_in_store() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
             let store = Arc::new(RwLock::new(TestStore::new(vec![], false)));
-            let api = test_api(store, true);
+            let api = test_api(store.clone(), true);
+
+            let ret: Response<_> = api
+                .send_outgoing_message(id.clone(), vec![], IDEMPOTENCY.to_string())
+                .wait()
+                .unwrap_err();
+            assert_eq!(ret.status().as_u16(), 404);
 
             let ret: Response<_> = api
                 .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap_err();
+                .unwrap();
             assert_eq!(ret.status().as_u16(), 404);
+
+            let s = store.read();
+            let cache = s.cache.read();
+            let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
+
+            let cache_hits = s.cache_hits.read();
+            assert_eq!(*cache_hits, 1);
+            assert_eq!(cached_data.0, 404);
+            assert_eq!(cached_data.1, &Bytes::from("Error getting account: 0"));
         }
 
     }

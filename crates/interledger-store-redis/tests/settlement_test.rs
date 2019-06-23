@@ -15,7 +15,7 @@ lazy_static! {
 
 #[test]
 fn credits_prepaid_amount() {
-    block_on(test_store().and_then(|(mut store, context)| {
+    block_on(test_store().and_then(|(store, context)| {
         context.async_connection().and_then(move |conn| {
             store
                 .update_balance_for_incoming_settlement(0, 100, IDEMPOTENCY_KEY.clone())
@@ -40,7 +40,7 @@ fn credits_prepaid_amount() {
 
 #[test]
 fn saves_and_loads_idempotency_key_data_properly() {
-    block_on(test_store().and_then(|(mut store, context)| {
+    block_on(test_store().and_then(|(store, context)| {
         store
             .save_idempotent_data(IDEMPOTENCY_KEY.clone(), StatusCode::OK, Bytes::from("TEST"))
             .map_err(|err| eprintln!("Redis error: {:?}", err))
@@ -68,7 +68,7 @@ fn saves_and_loads_idempotency_key_data_properly() {
 
 #[test]
 fn idempotent_settlement_calls() {
-    block_on(test_store().and_then(|(mut store, context)| {
+    block_on(test_store().and_then(|(store, context)| {
         context.async_connection().and_then(move |conn| {
             store
                 .update_balance_for_incoming_settlement(0, 100, IDEMPOTENCY_KEY.clone())
@@ -120,7 +120,7 @@ fn idempotent_settlement_calls() {
 
 #[test]
 fn credits_balance_owed() {
-    block_on(test_store().and_then(|(mut store, context)| {
+    block_on(test_store().and_then(|(store, context)| {
         context
             .shared_async_connection()
             .map_err(|err| panic!(err))
@@ -161,7 +161,7 @@ fn credits_balance_owed() {
 
 #[test]
 fn clears_balance_owed() {
-    block_on(test_store().and_then(|(mut store, context)| {
+    block_on(test_store().and_then(|(store, context)| {
         context
             .shared_async_connection()
             .map_err(|err| panic!(err))
@@ -202,7 +202,7 @@ fn clears_balance_owed() {
 
 #[test]
 fn clears_balance_owed_and_puts_remainder_as_prepaid() {
-    block_on(test_store().and_then(|(mut store, context)| {
+    block_on(test_store().and_then(|(store, context)| {
         context
             .shared_async_connection()
             .map_err(|err| panic!(err))
