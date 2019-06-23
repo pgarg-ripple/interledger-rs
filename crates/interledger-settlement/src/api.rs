@@ -52,7 +52,7 @@ impl_web! {
         // TODO: Verify that the idempotency_key is seen as a "Idempotency-Key"
         // header by impl_web!
         #[post("/accounts/:account_id/settlement")]
-        fn receive_settlement(&self, account_id: String, body: u64, idempotency_key: String) -> impl Future<Item = Response<Bytes>, Error = Response<()>> {
+        fn receive_settlement(&self, account_id: String, body: u64, idempotency_key: String) -> impl Future<Item = Response<Bytes>, Error = Response<String>> {
             let amount = body;
             let store = self.store.clone();
             let mut store_clone = store.clone();
@@ -61,20 +61,23 @@ impl_web! {
             // operation is idempotent
             result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
-                    error!("Unable to parse account id: {}", account_id);
-                    Response::builder().status(400).body(()).unwrap()
+                    let err = format!("Unable to parse account id: {}", account_id);
+                    error!("{}", err);
+                    Response::builder().status(400).body(err).unwrap()
                 }))
-                .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_| {
-                    error!("Error getting account: {}", account_id);
-                    Response::builder().status(404).body(()).unwrap()
+                .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_err| {
+                    let err = format!("Error getting account: {}", account_id);
+                    error!("{}", err);
+                    Response::builder().status(404).body(err).unwrap()
                 }))
                 .and_then(|accounts| {
                     let account = &accounts[0];
                     if let Some(settlement_engine) = account.settlement_engine_details() {
                         Ok((account.clone(), settlement_engine))
                     } else {
-                        error!("Account {} does not have settlement engine details configured. Cannot handle incoming settlement", account.id());
-                        Err(Response::builder().status(404).body(()).unwrap())
+                        let err = format!("Account {} does not have settlement engine details configured. Cannot handle incoming settlement", account.id());
+                        error!("{}", err);
+                        Err(Response::builder().status(404).body(err).unwrap())
                     }
                 })
                 .and_then(move |(account, settlement_engine)| {
@@ -83,8 +86,9 @@ impl_web! {
 
                     store_clone.update_balance_for_incoming_settlement(account_id, amount, idempotency_key)
                         .map_err(move |_| {
-                            error!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
-                            Response::builder().status(500).body(()).unwrap()
+                            let err = format!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
+                            error!("{}", err);
+                            Response::builder().status(500).body(err).unwrap()
                         })
                 })
                 .and_then(|_| Ok(Response::builder().status(200).body(Bytes::from("Success")).unwrap()))
@@ -94,7 +98,7 @@ impl_web! {
         // until it reaches the peer's settlement engine. Extract is not
         // implemented for Bytes unfortunately.
         #[post("/accounts/:account_id/messages")]
-        fn send_outgoing_message(&self, account_id: String, body: Vec<u8>, idempotency_key: String)-> impl Future<Item = Response<Bytes>, Error = Response<()>> {
+        fn send_outgoing_message(&self, account_id: String, body: Vec<u8>, idempotency_key: String)-> impl Future<Item = Response<Bytes>, Error = Response<String>> {
             let store = self.store.clone();
             let mut store_clone = self.store.clone(); // TODO: Can we avoid these clones?
             let mut outgoing_handler = self.outgoing_handler.clone();
@@ -102,8 +106,9 @@ impl_web! {
             // Check store for idempotency key. If exists, return cached data
             store_clone.load_idempotent_data(idempotency_key.clone())
             .map_err(move |err| {
-                error!("Couldn't connect to store {:?}", err);
-                Response::builder().status(500).body(()).unwrap()
+                let err = format!("Couldn't connect to store {:?}", err);
+                error!("{}", err);
+                Response::builder().status(500).body(err).unwrap()
             }).and_then(move |data: Option<(StatusCode, Bytes)>| {
                 if let Some(d) = data {
                     return Either::A(ok(Response::builder().status(d.0).body(d.1).unwrap()))
@@ -112,20 +117,23 @@ impl_web! {
                 Either::B(
                 result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
-                    error!("Unable to parse account id: {}", account_id);
-                    Response::builder().status(400).body(()).unwrap()
+                    let err = format!("Unable to parse account id: {}", account_id);
+                    error!("{}", err);
+                    Response::builder().status(400).body(err).unwrap()
                 }))
                 .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_| {
-                    error!("Error getting account: {}", account_id);
-                    Response::builder().status(404).body(()).unwrap()
+                    let err = format!("Error getting account: {}", account_id);
+                    error!("{}", err);
+                    Response::builder().status(404).body(err).unwrap()
                 }))
                 .and_then(|accounts| {
                     let account = &accounts[0];
                     if let Some(settlement_engine) = account.settlement_engine_details() {
                         Ok((account.clone(), settlement_engine))
                     } else {
-                        error!("Account {} has no settlement engine details configured, cannot send a settlement engine message to that account", accounts[0].id());
-                        Err(Response::builder().status(404).body(()).unwrap())
+                        let err = format!("Account {} has no settlement engine details configured, cannot send a settlement engine message to that account", accounts[0].id());
+                        error!("{}", err);
+                        Err(Response::builder().status(404).body(err).unwrap())
                     }
                 })
                 .and_then(move |(account, settlement_engine)| {
@@ -148,15 +156,17 @@ impl_web! {
                         }.build()
                     })
                     .map_err(|reject| {
-                        error!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
-                        Response::builder().status(502).body(()).unwrap()
+                        let err = format!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
+                        error!("{}", err);
+                        Response::builder().status(502).body(err).unwrap()
                     })
                 })
                 .and_then(move |fulfill| {
                     let data = Bytes::from(fulfill.data());
                     store_clone.save_idempotent_data(idempotency_key, StatusCode::OK, data.clone())
                     .map_err(move |err| {
-                        error!("Couldn't connect to store {:?}", err);
+                        let err = format!("Couldn't connect to store {:?}", err);
+                        error!("{}", err);
                         Response::builder().status(500).body(err).unwrap()
                     })
                     .and_then(|_| Ok(
