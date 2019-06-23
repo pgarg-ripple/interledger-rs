@@ -8,7 +8,6 @@ use interledger_service_util::Convert;
 use reqwest::r#async::Client;
 use uuid::Uuid;
 
-
 #[derive(Clone)]
 pub struct SettlementClient {
     http_client: Client,
@@ -64,7 +63,6 @@ impl SettlementClient {
         Either::B(err(()))
     }
 }
-
 
 impl Default for SettlementClient {
     fn default() -> Self {
