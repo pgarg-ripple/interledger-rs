@@ -57,7 +57,9 @@ impl_web! {
             let store = self.store.clone();
             let mut store_clone = store.clone();
             let mut store_clone2 = store.clone();
+            let mut store_clone3 = store.clone();
             let idempotency_key_clone = idempotency_key.clone();
+            let idempotency_key_clone2 = idempotency_key.clone();
 
             // Check store for idempotency key. If exists, return cached data
             store_clone.load_idempotent_data(idempotency_key.clone())
@@ -73,9 +75,15 @@ impl_web! {
             Either::B(
             result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
-                    let err = format!("Unable to parse account id: {}", account_id);
-                    error!("{}", err);
-                    Response::builder().status(400).body(err).unwrap()
+                    let error = format!("Unable to parse account id: {}", account_id);
+                    error!("{}", error);
+
+                    // save the idempotency data, can do .wait() here? .then /
+                    // .and_then handling of the future resulted in type
+                    // mismatch errors with the next future.
+                    let _ret = store_clone3.save_idempotent_data(idempotency_key_clone2, StatusCode::OK, Bytes::from(error.clone()))
+                    .wait();
+                    Response::builder().status(400).body(error).unwrap()
                 }))
                 .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_err| {
                     let err = format!("Error getting account: {}", account_id);
