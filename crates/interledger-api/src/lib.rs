@@ -15,11 +15,11 @@ use interledger_router::RouterStore;
 use interledger_service::{Account as AccountTrait, IncomingService, OutgoingService};
 use interledger_service_util::{BalanceStore, ExchangeRateStore};
 use interledger_settlement::{SettlementAccount, SettlementApi, SettlementStore};
+use parking_lot::RwLock;
 use serde::Serialize;
 use std::str;
-use tower_web::{net::ConnectionStream, ServiceBuilder};
 use std::sync::Arc;
-use parking_lot::RwLock;
+use tower_web::{net::ConnectionStream, ServiceBuilder};
 
 mod routes;
 use self::routes::*;
