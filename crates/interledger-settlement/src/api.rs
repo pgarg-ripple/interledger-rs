@@ -1,7 +1,7 @@
 use super::{SettlementAccount, SettlementStore};
 use bytes::Bytes;
 use futures::{
-    future::{ok, result, Either},
+    future::{err, ok, result, Either},
     Future,
 };
 use hyper::{Response, StatusCode};
@@ -81,13 +81,14 @@ impl_web! {
                 Response::builder().status(500).body(err).unwrap()
             }).and_then(move |data: Option<(StatusCode, Bytes)>| {
                 if let Some(d) = data {
-                    let data = Response::builder().status(d.0).body(d.1).unwrap();
-                    // TODO: Make the else branch return a `err` instead of ok. This will make
-                    // it impossible to `unwrap` on an error (check idempotency
-                    // tests that `unwrap_err` when the function is first called,
-                    // but on the cached response they just `unwrap`.)
-                    let ret = if d.0.is_success() { ok(data) } else { ok(data) };
-                    return Either::A(ret)
+                    if d.0.is_success() {
+                        let data = Response::builder().status(d.0).body(d.1).unwrap();
+                        return Either::A(Either::A(ok(data)));
+                    } else {
+                        let body = String::from_utf8(d.1.to_vec()).unwrap(); /// if success return bytes otherwise return string
+                        let data = Response::builder().status(d.0).body(body).unwrap();
+                        return Either::A(Either::B(err(data)));
+                    }
                 }
 
                 Either::B(
@@ -167,7 +168,14 @@ impl_web! {
                 Response::builder().status(500).body(err).unwrap()
             }).and_then(move |data: Option<(StatusCode, Bytes)>| {
                 if let Some(d) = data {
-                    return Either::A(ok(Response::builder().status(d.0).body(d.1).unwrap()))
+                    if d.0.is_success() {
+                        let data = Response::builder().status(d.0).body(d.1).unwrap();
+                        return Either::A(Either::A(ok(data)));
+                    } else {
+                        let body = String::from_utf8(d.1.to_vec()).unwrap(); /// if success return bytes otherwise return string
+                        let data = Response::builder().status(d.0).body(body).unwrap();
+                        return Either::A(Either::B(err(data)));
+                    }
                 }
 
                 Either::B(
@@ -307,7 +315,7 @@ mod tests {
             let ret: Response<_> = api
                 .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap();
+                .unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
             assert_eq!(ret.body(), "Account 0 does not have settlement engine details configured. Cannot handle incoming settlement");
 
@@ -353,14 +361,14 @@ mod tests {
             let ret: Response<_> = api
                 .receive_settlement(id.clone(), 999, IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap();
+                .unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
             assert_eq!(ret.body(), "Unable to parse account id: a");
 
             let _ret: Response<_> = api
                 .receive_settlement(id, 999, IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap();
+                .unwrap_err();
 
             let s = store.read();
             let cache = s.cache.read();
@@ -388,7 +396,7 @@ mod tests {
             let ret: Response<_> = api
                 .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap(); // Bug that returns Result::OK
+                .unwrap_err(); // Bug that returns Result::OK
             assert_eq!(ret.status().as_u16(), 404);
             assert_eq!(ret.body(), "Error getting account: 0");
 
@@ -449,7 +457,7 @@ mod tests {
             let ret = api
                 .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap(); // error code bug in if/else
+                .unwrap_err();
             assert_eq!(ret.status().as_u16(), 502);
 
             let s = store.read();
@@ -478,13 +486,13 @@ mod tests {
             let ret: Response<_> = api
                 .send_outgoing_message(id.clone(), vec![], IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap(); // RETURN OK BUG WHEN IT SHOULD ERR
+                .unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
 
             let _ret: Response<_> = api
                 .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap(); // RETURN OK BUG WHEN IT SHOULD ERR
+                .unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
 
             let s = store.read();
@@ -512,7 +520,7 @@ mod tests {
             let ret: Response<_> = api
                 .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
                 .wait()
-                .unwrap();
+                .unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
 
             let s = store.read();
