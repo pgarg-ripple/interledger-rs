@@ -3,7 +3,9 @@ extern crate lazy_static;
 
 mod common;
 
+use bytes::Bytes;
 use common::*;
+use hyper::StatusCode;
 use interledger_settlement::SettlementStore;
 use redis::{cmd, r#async::SharedConnection};
 
@@ -40,14 +42,14 @@ fn credits_prepaid_amount() {
 fn saves_and_loads_idempotency_key_data_properly() {
     block_on(test_store().and_then(|(mut store, context)| {
         store
-            .save_idempotent_data(IDEMPOTENCY_KEY.clone(), b"TEST".to_vec())
+            .save_idempotent_data(IDEMPOTENCY_KEY.clone(), StatusCode::OK, Bytes::from("TEST"))
             .map_err(|err| eprintln!("Redis error: {:?}", err))
             .and_then(move |_| {
                 store
                     .load_idempotent_data(IDEMPOTENCY_KEY.clone())
                     .map_err(|err| eprintln!("Redis error: {:?}", err))
                     .and_then(move |data1| {
-                        assert_eq!(data1.unwrap(), b"TEST".to_vec());
+                        assert_eq!(data1.unwrap(), (StatusCode::OK, Bytes::from("TEST")));
                         let _ = context;
 
                         store

@@ -6,6 +6,7 @@ use futures::{
     Future, Stream,
 };
 use hashbrown::{HashMap, HashSet};
+use hyper::StatusCode;
 use interledger_api::{AccountDetails, NodeStore};
 use interledger_btp::BtpStore;
 use interledger_ccp::RouteManagerStore;
@@ -22,6 +23,7 @@ use ring::{aead, hmac};
 use std::{
     iter::FromIterator,
     str,
+    str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -110,15 +112,14 @@ local idempotency_key = ARGV[3]
 local balance, prepaid_amount = unpack(redis.call('HMGET', account, 'balance', 'prepaid_amount'))
 
 -- If idempotency key has been used, then do not perform any operations
-local exists = redis.call('HGET', idempotency_key, 'set')
+local exists = redis.call('GET', idempotency_key)
 if exists == '1' then
     return balance + prepaid_amount
 end
 
 -- Otherwise, set it to true (there's no value to cached as a response)
 -- and make it expire after 24h (86400 sec)
-redis.call('HSET', idempotency_key, 'set', '1')
-redis.call('EXPIRE', idempotency_key, 86400)
+redis.call('SET', idempotency_key, '1', 'EX', 86400)
 
 -- Credit the incoming settlement to the balance and/or prepaid amount,
 -- depending on whether that account currently owes money or not
@@ -1150,12 +1151,11 @@ impl SettlementStore for RedisStore {
     fn load_idempotent_data(
         &mut self,
         idempotency_key: String,
-    ) -> Box<dyn Future<Item = Option<Vec<u8>>, Error = ()> + Send> {
+    ) -> Box<dyn Future<Item = Option<(StatusCode, Bytes)>, Error = ()> + Send> {
         let idempotency_key_clone = idempotency_key.clone();
         Box::new(
-            cmd("HGET")
+            cmd("HGETALL")
                 .arg(idempotency_key.clone())
-                .arg("value")
                 .query_async(self.connection.as_ref().clone())
                 .map_err(move |err| {
                     error!(
@@ -1163,12 +1163,20 @@ impl SettlementStore for RedisStore {
                         idempotency_key_clone, err
                     )
                 })
-                .and_then(move |(_connection, data): (_, Option<Vec<u8>>)| {
-                    trace!(
-                        "Loaded idempotency key {} - value {:?}",
-                        idempotency_key,
-                        data
-                    );
+                .and_then(move |(_connection, ret): (_, Vec<String>)| {
+                    // even elements represent the key
+                    // odd elements represent the value
+                    // there must be 4 elements, a status code and a data value
+                    // stored there
+                    let data = if ret.len() == 4 {
+                        trace!("Loaded idempotency key {} - {:?}", idempotency_key, ret);
+                        Some((
+                            StatusCode::from_str(&ret[1]).unwrap(),
+                            Bytes::from(ret[3].clone()),
+                        ))
+                    } else {
+                        None
+                    };
                     Ok(data)
                 }),
         )
@@ -1177,47 +1185,28 @@ impl SettlementStore for RedisStore {
     fn save_idempotent_data(
         &mut self,
         idempotency_key: String,
-        data: Vec<u8>,
+        status_code: StatusCode,
+        data: Bytes,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
-        // TODO: Replace these clones with something smarter.
-        let idempotency_key_clone = idempotency_key.clone();
-        let idempotency_key_clone2 = idempotency_key.clone();
-        let data_clone = data.clone();
+        let mut pipe = redis::pipe();
+        pipe.atomic()
+            .hset(idempotency_key.clone(), "status_code", status_code.as_u16())
+            .ignore()
+            .hset(idempotency_key.clone(), "data", data.as_ref())
+            .ignore() // Can we assume the data being passed is utf8? If so, maybe the funciton can take utf8 as argument.
+            .expire(idempotency_key.clone(), 86400)
+            .ignore();
         Box::new(
-            cmd("HSET")
-                .arg(idempotency_key.clone())
-                .arg("value")
-                .arg(data.clone())
-                .query_async(self.connection.as_ref().clone())
-                .map_err(move |err| {
-                    error!(
-                        "Error caching idempotency key {} to value {:?}: {:?}",
-                        idempotency_key_clone, data_clone, err
-                    )
-                })
-                .and_then(move |(connection, _balance): (_, i64)| {
+            pipe.query_async(self.connection.as_ref().clone())
+                .map_err(|err| error!("Error caching: {:?}", err))
+                .and_then(move |(_connection, _): (_, Vec<String>)| {
                     trace!(
-                        "Cached idempotency key {} to value {:?}",
+                        "Cached {:?}: {:?}, {:?}",
                         idempotency_key,
-                        data
+                        status_code,
+                        data,
                     );
-                    cmd("EXPIRE")
-                        .arg(idempotency_key_clone2.clone())
-                        .arg(86400) // 1 day
-                        .query_async(connection)
-                        .map_err(move |err| {
-                            error!(
-                                "Error caching idempotency key {} to value {:?}: {:?}",
-                                idempotency_key, data, err
-                            )
-                        })
-                        .and_then(move |(_connection, _bal): (_, i64)| {
-                            trace!(
-                                "Idempotency key {} will expire in 1 day",
-                                idempotency_key_clone2
-                            );
-                            Ok(())
-                        })
+                    Ok(())
                 }),
         )
     }
