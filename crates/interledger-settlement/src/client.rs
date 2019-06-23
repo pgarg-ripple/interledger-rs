@@ -6,6 +6,8 @@ use futures::{
 use interledger_ildcp::IldcpAccount;
 use interledger_service_util::Convert;
 use reqwest::r#async::Client;
+use uuid::Uuid;
+
 
 #[derive(Clone)]
 pub struct SettlementClient {
@@ -33,17 +35,18 @@ impl SettlementClient {
                 .expect("Invalid settlement engine URL")
                 .push("accounts")
                 .push(&account.id().to_string())
-                .push("settlement"); // Maybe set the idempotency flag here in the headers
+                .push("settlement");
             trace!(
                 "Sending settlement of amount {} to settlement engine: {}",
                 amount,
                 settlement_engine_url
             );
             // TODO add auth
-            // TOOD add id and make settlement call idempotent
             let settlement_engine_url_clone = settlement_engine_url.clone();
+            let idempotency_uuid = Uuid::new_v4().to_hyphenated().to_string();
             return Either::A(self.http_client.post(settlement_engine_url.clone())
                 .header("Content-Type", "application/octet-stream")
+                .header("Idempotency-Key", idempotency_uuid)
                 .body(amount.to_string())
                 .send()
                 .map_err(move |err| error!("Error sending settlement command to settlement engine {}: {:?}", settlement_engine_url, err))
@@ -62,6 +65,7 @@ impl SettlementClient {
     }
 }
 
+
 impl Default for SettlementClient {
     fn default() -> Self {
         SettlementClient::new()
@@ -73,21 +77,27 @@ mod tests {
     use super::*;
     use crate::fixtures::TEST_ACCOUNT_0;
     use crate::test_helpers::{block_on, mock_settlement};
+    use mockito::Matcher;
 
     #[test]
     fn settlement_ok() {
-        let m = mock_settlement(200).create();
+        let m = mock_settlement(200)
+            .match_header("Idempotency-Key", Matcher::Any)
+            .create();
         let client = SettlementClient::new();
 
         let ret = block_on(client.send_settlement(TEST_ACCOUNT_0.clone(), 100));
 
         m.assert();
         assert!(ret.is_ok());
+        println!("{:?} RET", ret.unwrap());
     }
 
     #[test]
     fn engine_rejects() {
-        let m = mock_settlement(500).create();
+        let m = mock_settlement(500)
+            .match_header("Idempotency-Key", Matcher::Any)
+            .create();
         let client = SettlementClient::new();
 
         let ret = block_on(client.send_settlement(TEST_ACCOUNT_0.clone(), 100));
@@ -98,7 +108,10 @@ mod tests {
 
     #[test]
     fn account_does_not_have_settlement_engine() {
-        let m = mock_settlement(200).create().expect(0);
+        let m = mock_settlement(200)
+            .expect(0)
+            .match_header("Idempotency-Key", Matcher::Any)
+            .create();
         let client = SettlementClient::new();
 
         let mut acc = TEST_ACCOUNT_0.clone();
