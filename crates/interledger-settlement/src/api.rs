@@ -56,9 +56,21 @@ impl_web! {
             let amount = body;
             let store = self.store.clone();
             let mut store_clone = store.clone();
+            let mut store_clone2 = store.clone();
+            let idempotency_key_clone = idempotency_key.clone();
 
-            // TODO: return the cached response here w/o assuming that the Store
-            // operation is idempotent
+            // Check store for idempotency key. If exists, return cached data
+            store_clone.load_idempotent_data(idempotency_key.clone())
+            .map_err(move |err| {
+                let err = format!("Couldn't connect to store {:?}", err);
+                error!("{}", err);
+                Response::builder().status(500).body(err).unwrap()
+            }).and_then(move |data: Option<(StatusCode, Bytes)>| {
+                if let Some(d) = data {
+                    return Either::A(ok(Response::builder().status(d.0).body(d.1).unwrap()))
+                }
+
+            Either::B(
             result(A::AccountId::from_str(&account_id)
                 .map_err(move |_err| {
                     let err = format!("Unable to parse account id: {}", account_id);
@@ -84,14 +96,25 @@ impl_web! {
                     let account_id = account.id();
                     let amount = amount.normalize_scale(account.asset_scale(), settlement_engine.asset_scale);
 
-                    store_clone.update_balance_for_incoming_settlement(account_id, amount, idempotency_key)
+                    store_clone.update_balance_for_incoming_settlement(account_id, amount, idempotency_key_clone)
                         .map_err(move |_| {
                             let err = format!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
                             error!("{}", err);
                             Response::builder().status(500).body(err).unwrap()
                         })
                 })
-                .and_then(|_| Ok(Response::builder().status(200).body(Bytes::from("Success")).unwrap()))
+                .and_then(move |_| {
+                    let ret = Bytes::from("Success");
+                    store_clone2.save_idempotent_data(idempotency_key.clone(), StatusCode::OK, ret.clone())
+                    .map_err(move |err| {
+                        let err = format!("Couldn't connect to store {:?}", err);
+                        error!("{}", err);
+                        Response::builder().status(500).body(err).unwrap()
+                    })
+                    .and_then(|_| Ok(Response::builder().status(StatusCode::OK).body(ret).unwrap()))
+                })
+            )
+            })
         }
 
         // Gets called by our settlement engine, forwards the request outwards
@@ -172,8 +195,8 @@ impl_web! {
                     .and_then(|_| Ok(
                         Response::builder().status(200).body(data).unwrap()
                     ))
-                }))
-            })
+                })
+            )})
         }
     }
 }
