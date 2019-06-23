@@ -18,6 +18,8 @@ use interledger_settlement::{SettlementAccount, SettlementApi, SettlementStore};
 use serde::Serialize;
 use std::str;
 use tower_web::{net::ConnectionStream, ServiceBuilder};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 mod routes;
 use self::routes::*;
@@ -151,7 +153,7 @@ where
                 spsp
             })
             .resource(SettlementApi::new(
-                self.store.clone(),
+                Arc::new(RwLock::new(self.store.clone())),
                 self.outgoing_handler.clone(),
             ))
             .resource(AccountsApi::new(

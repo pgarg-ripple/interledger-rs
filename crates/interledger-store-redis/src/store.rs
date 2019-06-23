@@ -1149,7 +1149,7 @@ impl SettlementStore for RedisStore {
     type Account = Account;
 
     fn load_idempotent_data(
-        &mut self,
+        &self,
         idempotency_key: String,
     ) -> Box<dyn Future<Item = Option<(StatusCode, Bytes)>, Error = ()> + Send> {
         let idempotency_key_clone = idempotency_key.clone();
@@ -1183,7 +1183,7 @@ impl SettlementStore for RedisStore {
     }
 
     fn save_idempotent_data(
-        &mut self,
+        &self,
         idempotency_key: String,
         status_code: StatusCode,
         data: Bytes,
@@ -1212,7 +1212,7 @@ impl SettlementStore for RedisStore {
     }
 
     fn update_balance_for_incoming_settlement(
-        &mut self,
+        &self,
         account_id: u64,
         amount: u64,
         idempotency_key: String,
