@@ -53,7 +53,7 @@ pub trait SettlementStore {
     /// Takes mutable reference to self because the store's fields may be
     /// responsible for keeping track of the idempotency keys
     fn update_balance_for_incoming_settlement(
-        &mut self,
+        &self,
         account_id: <Self::Account as Account>::AccountId,
         amount: u64,
         idempotency_key: String,
@@ -64,7 +64,7 @@ pub trait SettlementStore {
     /// Takes mutable reference to self because the store's fields may be
     /// responsible for keeping track of the idempotency keys
     fn load_idempotent_data(
-        &mut self,
+        &self,
         idempotency_key: String,
     ) -> Box<dyn Future<Item = Option<(StatusCode, Bytes)>, Error = ()> + Send>;
 
@@ -72,7 +72,7 @@ pub trait SettlementStore {
     /// Takes mutable reference to self because the store's fields may be
     /// responsible for keeping track of the idempotency keys
     fn save_idempotent_data(
-        &mut self,
+        &self,
         idempotency_key: String,
         status_code: StatusCode,
         data: Bytes,

@@ -14,6 +14,7 @@ use interledger_packet::{Address, ErrorCode, FulfillBuilder, RejectBuilder};
 use mockito::mock;
 
 use crate::fixtures::{BODY, MESSAGES_API, SERVICE_ADDRESS, SETTLEMENT_API, TEST_ACCOUNT_0};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -67,15 +68,15 @@ impl IldcpAccount for TestAccount {
 pub struct TestStore {
     pub accounts: Arc<Vec<TestAccount>>,
     pub should_fail: bool,
-    pub cache: HashMap<String, (StatusCode, Bytes)>,
-    pub cache_hits: u64,
+    pub cache: Arc<RwLock<HashMap<String, (StatusCode, Bytes)>>>,
+    pub cache_hits: Arc<RwLock<u64>>,
 }
 
 impl SettlementStore for TestStore {
     type Account = TestAccount;
 
     fn update_balance_for_incoming_settlement(
-        &mut self,
+        &self,
         _account_id: <Self::Account as Account>::AccountId,
         _amount: u64,
         _idempotency_key: String,
@@ -85,12 +86,14 @@ impl SettlementStore for TestStore {
     }
 
     fn load_idempotent_data(
-        &mut self,
+        &self,
         idempotency_key: String,
     ) -> Box<dyn Future<Item = Option<(StatusCode, Bytes)>, Error = ()> + Send> {
-        let d = if let Some(data) = self.cache.get(&idempotency_key) {
+        let cache = self.cache.read();
+        let d = if let Some(data) = cache.get(&idempotency_key) {
             println!("HIT CACHE!");
-            self.cache_hits += 1; // used to test how many times this branch gets executed
+            let mut guard = self.cache_hits.write();
+            *guard += 1; // used to test how many times this branch gets executed
             Some((data.0, data.1.clone()))
         } else {
             println!("CALLED BUT DID NOT HIT CACHE");
@@ -100,13 +103,14 @@ impl SettlementStore for TestStore {
     }
 
     fn save_idempotent_data(
-        &mut self,
+        &self,
         idempotency_key: String,
         status_code: StatusCode,
         data: Bytes,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
         println!("CACHING THE DATA");
-        self.cache.insert(idempotency_key, (status_code, data));
+        let mut cache = self.cache.write();
+        cache.insert(idempotency_key, (status_code, data));
         Box::new(ok(()))
     }
 }
@@ -142,8 +146,8 @@ impl TestStore {
         TestStore {
             accounts: Arc::new(accs),
             should_fail,
-            cache: HashMap::new(),
-            cache_hits: 0,
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            cache_hits: Arc::new(RwLock::new(0)),
         }
     }
 }
@@ -205,15 +209,15 @@ pub fn test_service(
     )
 }
 
-pub fn test_store(store_fails: bool, account_has_engine: bool) -> TestStore {
+pub fn test_store(store_fails: bool, account_has_engine: bool) -> Arc<RwLock<TestStore>> {
     let mut acc = TEST_ACCOUNT_0.clone();
     acc.no_details = !account_has_engine;
 
-    TestStore::new(vec![acc], store_fails)
+    Arc::new(RwLock::new(TestStore::new(vec![acc], store_fails)))
 }
 
 pub fn test_api(
-    test_store: TestStore,
+    test_store: Arc<RwLock<TestStore>>,
     should_fulfill: bool,
 ) -> SettlementApi<TestStore, impl OutgoingService<TestAccount> + Clone + Send + Sync, TestAccount>
 {

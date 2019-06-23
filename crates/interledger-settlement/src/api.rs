@@ -9,6 +9,8 @@ use interledger_ildcp::IldcpAccount;
 use interledger_packet::PrepareBuilder;
 use interledger_service::{AccountStore, OutgoingRequest, OutgoingService};
 use interledger_service_util::Convert;
+use parking_lot::RwLock;
+use std::sync::Arc;
 use std::{
     marker::PhantomData,
     str::{self, FromStr},
@@ -22,7 +24,7 @@ static PEER_PROTOCOL_CONDITION: [u8; 32] = [
 
 pub struct SettlementApi<S, O, A> {
     outgoing_handler: O,
-    store: S,
+    store: Arc<RwLock<S>>,
     account_type: PhantomData<A>,
 }
 
@@ -34,7 +36,7 @@ impl_web! {
         O: OutgoingService<A> + Clone + Send + Sync + 'static,
         A: SettlementAccount + IldcpAccount + Send + Sync + 'static,
     {
-        pub fn new(store: S, outgoing_handler: O) -> Self {
+        pub fn new(store: Arc<RwLock<S>>, outgoing_handler: O) -> Self {
             SettlementApi {
                 store,
                 outgoing_handler,
@@ -42,27 +44,22 @@ impl_web! {
             }
         }
 
-        pub fn store(&self) -> S {
-            self.store.clone()
-        }
-
-        // TODO: Can the Response<()> be converted to a Response<String>? It'd
-        // be nice if we could include the full error message body (currently
-        // it's just the header)
-        // TODO: Verify that the idempotency_key is seen as a "Idempotency-Key"
-        // header by impl_web!
         #[post("/accounts/:account_id/settlement")]
         fn receive_settlement(&self, account_id: String, body: u64, idempotency_key: String) -> impl Future<Item = Response<Bytes>, Error = Response<String>> {
             let amount = body;
-            let store = self.store.clone();
-            let mut store_clone = store.clone();
-            let mut store_clone2 = store.clone();
-            let mut store_clone3 = store.clone();
+            // These clones are very ugly (but cheap since this is an Arc). They
+            // are required due to the multiple moves inside the futures chain.
+            // Can we remove them in some smart way?
+            let store = Arc::clone(&self.store);
+            let store_clone = Arc::clone(&self.store);
+            let store_clone2 = Arc::clone(&self.store);
+            let store_clone3 = Arc::clone(&self.store);
             let idempotency_key_clone = idempotency_key.clone();
             let idempotency_key_clone2 = idempotency_key.clone();
 
             // Check store for idempotency key. If exists, return cached data
-            store_clone.load_idempotent_data(idempotency_key.clone())
+            let s = self.store.read();
+            s.load_idempotent_data(idempotency_key.clone())
             .map_err(move |err| {
                 let err = format!("Couldn't connect to store {:?}", err);
                 error!("{}", err);
@@ -81,11 +78,11 @@ impl_web! {
                     // save the idempotency data, can do .wait() here? .then /
                     // .and_then handling of the future resulted in type
                     // mismatch errors with the next future.
-                    let _ret = store_clone3.save_idempotent_data(idempotency_key_clone2, StatusCode::OK, Bytes::from(error.clone()))
+                    let _ret = store_clone3.write().save_idempotent_data(idempotency_key_clone2, StatusCode::OK, Bytes::from(error.clone()))
                     .wait();
                     Response::builder().status(400).body(error).unwrap()
                 }))
-                .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_err| {
+                .and_then(move |account_id| store.read().get_accounts(vec![account_id]).map_err(move |_err| {
                     let err = format!("Error getting account: {}", account_id);
                     error!("{}", err);
                     Response::builder().status(404).body(err).unwrap()
@@ -104,7 +101,7 @@ impl_web! {
                     let account_id = account.id();
                     let amount = amount.normalize_scale(account.asset_scale(), settlement_engine.asset_scale);
 
-                    store_clone.update_balance_for_incoming_settlement(account_id, amount, idempotency_key_clone)
+                    store_clone.write().update_balance_for_incoming_settlement(account_id, amount, idempotency_key_clone)
                         .map_err(move |_| {
                             let err = format!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
                             error!("{}", err);
@@ -113,7 +110,7 @@ impl_web! {
                 })
                 .and_then(move |_| {
                     let ret = Bytes::from("Success");
-                    store_clone2.save_idempotent_data(idempotency_key.clone(), StatusCode::OK, ret.clone())
+                    store_clone2.write().save_idempotent_data(idempotency_key.clone(), StatusCode::OK, ret.clone())
                     .map_err(move |err| {
                         let err = format!("Couldn't connect to store {:?}", err);
                         error!("{}", err);
@@ -131,11 +128,12 @@ impl_web! {
         #[post("/accounts/:account_id/messages")]
         fn send_outgoing_message(&self, account_id: String, body: Vec<u8>, idempotency_key: String)-> impl Future<Item = Response<Bytes>, Error = Response<String>> {
             let store = self.store.clone();
-            let mut store_clone = self.store.clone(); // TODO: Can we avoid these clones?
+            let store_clone = self.store.clone(); // TODO: Can we avoid these clones?
             let mut outgoing_handler = self.outgoing_handler.clone();
 
             // Check store for idempotency key. If exists, return cached data
-            store_clone.load_idempotent_data(idempotency_key.clone())
+            let s = self.store.read();
+            s.load_idempotent_data(idempotency_key.clone())
             .map_err(move |err| {
                 let err = format!("Couldn't connect to store {:?}", err);
                 error!("{}", err);
@@ -152,7 +150,7 @@ impl_web! {
                     error!("{}", err);
                     Response::builder().status(400).body(err).unwrap()
                 }))
-                .and_then(move |account_id| store.get_accounts(vec![account_id]).map_err(move |_| {
+                .and_then(move |account_id| store.read().get_accounts(vec![account_id]).map_err(move |_| {
                     let err = format!("Error getting account: {}", account_id);
                     error!("{}", err);
                     Response::builder().status(404).body(err).unwrap()
@@ -194,7 +192,7 @@ impl_web! {
                 })
                 .and_then(move |fulfill| {
                     let data = Bytes::from(fulfill.data());
-                    store_clone.save_idempotent_data(idempotency_key, StatusCode::OK, data.clone())
+                    store_clone.write().save_idempotent_data(idempotency_key, StatusCode::OK, data.clone())
                     .map_err(move |err| {
                         let err = format!("Couldn't connect to store {:?}", err);
                         error!("{}", err);
@@ -276,7 +274,7 @@ mod tests {
         #[test]
         fn account_not_in_store() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
-            let store = TestStore::new(vec![], false);
+            let store = Arc::new(RwLock::new(TestStore::new(vec![], false)));
             let api = test_api(store, false);
 
             let ret: Response<_> = api
@@ -304,11 +302,11 @@ mod tests {
             assert_eq!(ret.body(), &Bytes::from("hello!"));
         }
 
-        // #[test] -- Disable until we figure out how to do with Arc<RwLock>>
+        #[test]
         fn message_idempotent() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
             let store = test_store(false, true);
-            let api = test_api(store, true);
+            let api = test_api(store.clone(), true);
 
             let ret: Response<_> = api
                 .send_outgoing_message(id.clone(), vec![], IDEMPOTENCY.to_string())
@@ -316,16 +314,6 @@ mod tests {
                 .unwrap();
             assert_eq!(ret.status(), StatusCode::OK);
             assert_eq!(ret.body(), &Bytes::from("hello!"));
-            // This test fails because the store passed in the API is not the
-            // same store that's used by the send_outgoing_message function,
-            // since it clones inside. We'd have to make the API take a
-            // reference to the store, such that it's able to mutate it
-            // internally. Maybe an Arc<RwLock>?
-            // Note that this wouldn't fail if the store is some external
-            // process, and it only fails if the store is being run in memory,
-            // such as in this case.
-            // This call should hit the `load_idempotent_data` call, and
-            // increase the test store's cache hits.
             let ret2 = api
                 .send_outgoing_message(id, vec![], IDEMPOTENCY.to_string())
                 .wait()
@@ -333,10 +321,12 @@ mod tests {
             assert_eq!(ret2.status(), StatusCode::OK);
             assert_eq!(ret2.body(), &Bytes::from("hello!"));
 
-            assert_eq!(api.store().cache_hits, 1);
-            let store = api.store();
-            let cache = store.cache;
+            let s = store.read();
+            let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
+
+            let cache_hits = s.cache_hits.read();
+            assert_eq!(*cache_hits, 1);
             assert_eq!(cached_data.0, StatusCode::OK);
             assert_eq!(cached_data.1, &Bytes::from("hello!"));
         }
@@ -372,7 +362,7 @@ mod tests {
         #[test]
         fn account_not_in_store() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
-            let store = TestStore::new(vec![], false);
+            let store = Arc::new(RwLock::new(TestStore::new(vec![], false)));
             let api = test_api(store, true);
 
             let ret: Response<_> = api
