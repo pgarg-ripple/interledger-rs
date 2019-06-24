@@ -152,10 +152,6 @@ where
                 }
                 spsp
             })
-            .resource(SettlementApi::new(
-                Arc::new(RwLock::new(self.store.clone())),
-                self.outgoing_handler.clone(),
-            ))
             .resource(AccountsApi::new(
                 self.admin_api_token.clone(),
                 self.store.clone(),
@@ -163,6 +159,19 @@ where
             .resource(SettingsApi::new(
                 self.admin_api_token.clone(),
                 self.store.clone(),
+            ))
+            .serve(incoming)
+    }
+
+    pub fn serve_settlement<I>(&self, incoming: I) -> impl Future<Item = (), Error = ()>
+    where
+        I: ConnectionStream,
+        I::Item: Send + 'static,
+    {
+        ServiceBuilder::new()
+            .resource(SettlementApi::new(
+                Arc::new(RwLock::new(self.store.clone())),
+                self.outgoing_handler.clone(),
             ))
             .serve(incoming)
     }

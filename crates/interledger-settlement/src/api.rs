@@ -22,6 +22,11 @@ static PEER_PROTOCOL_CONDITION: [u8; 32] = [
     110, 226, 51, 179, 144, 42, 89, 29, 13, 95, 41, 37,
 ];
 
+#[derive(Debug, Clone, Extract)]
+struct SettlementData {
+    amount: u64,
+}
+
 pub struct SettlementApi<S, O, A> {
     outgoing_handler: O,
     store: Arc<RwLock<S>>,
@@ -61,8 +66,8 @@ impl_web! {
         }
 
         #[post("/accounts/:account_id/settlement")]
-        fn receive_settlement(&self, account_id: String, body: u64, idempotency_key: String) -> impl Future<Item = Response<Bytes>, Error = Response<String>> {
-            let amount = body;
+        fn receive_settlement(&self, account_id: String, body: SettlementData, idempotency_key: String) -> impl Future<Item = Response<Bytes>, Error = Response<String>> {
+            let amount = body.amount;
             // These clones are very ugly (but cheap since this is an Arc). They
             // are required due to the multiple moves inside the futures chain.
             // Can we remove them in some smart way?
