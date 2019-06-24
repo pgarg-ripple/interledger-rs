@@ -91,12 +91,10 @@ impl SettlementStore for TestStore {
     ) -> Box<dyn Future<Item = Option<(StatusCode, Bytes)>, Error = ()> + Send> {
         let cache = self.cache.read();
         let d = if let Some(data) = cache.get(&idempotency_key) {
-            println!("HIT CACHE!");
             let mut guard = self.cache_hits.write();
             *guard += 1; // used to test how many times this branch gets executed
             Some((data.0, data.1.clone()))
         } else {
-            println!("CALLED BUT DID NOT HIT CACHE");
             None
         };
         Box::new(ok(d))
@@ -108,7 +106,6 @@ impl SettlementStore for TestStore {
         status_code: StatusCode,
         data: Bytes,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
-        println!("CACHING THE DATA");
         let mut cache = self.cache.write();
         cache.insert(idempotency_key, (status_code, data));
         Box::new(ok(()))

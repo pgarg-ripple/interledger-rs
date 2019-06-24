@@ -85,7 +85,7 @@ impl_web! {
                         let data = Response::builder().status(d.0).body(d.1).unwrap();
                         return Either::A(Either::A(ok(data)));
                     } else {
-                        let body = String::from_utf8(d.1.to_vec()).unwrap(); /// if success return bytes otherwise return string
+                        let body = String::from_utf8_lossy(&d.1.to_vec()).to_string();
                         let data = Response::builder().status(d.0).body(body).unwrap();
                         return Either::A(Either::B(err(data)));
                     }
@@ -98,10 +98,7 @@ impl_web! {
                         error!("{}", error_msg);
                         let status_code = StatusCode::from_u16(400).unwrap();
                         let data = Bytes::from(error_msg.clone());
-                        // save the idempotency data, can do .wait() here? .then /
-                        // .and_then handling of the future resulted in type
-                        // mismatch errors with the next future.
-                        let _ret = store.write().save_idempotent_data(idempotency_key, status_code, data).wait();
+                        store.write().save_idempotent_data(idempotency_key, status_code, data);
                         Response::builder().status(400).body(error_msg).unwrap()
                     }}))
                     .and_then({clone_all!(store, idempotency_key); move |account_id| {
@@ -112,9 +109,7 @@ impl_web! {
 
                             let status_code = StatusCode::from_u16(404).unwrap();
                             let data = Bytes::from(error_msg.clone());
-                            // Should we cache this case? What if between two
-                            // API calls the account store changes?
-                            let _ret = store.write().save_idempotent_data(idempotency_key.clone(), status_code, data).wait();
+                            store.write().save_idempotent_data(idempotency_key.clone(), status_code, data);
                             Response::builder().status(404).body(error_msg).unwrap()
                         }})
                     }})
@@ -125,7 +120,7 @@ impl_web! {
                         } else {
                             let error_msg = format!("Account {} does not have settlement engine details configured. Cannot handle incoming settlement", account.id());
                             error!("{}", error_msg);
-                            let _ret = store.write().save_idempotent_data(idempotency_key, StatusCode::from_u16(404).unwrap(), Bytes::from(error_msg.clone())).wait();
+                            store.write().save_idempotent_data(idempotency_key, StatusCode::from_u16(404).unwrap(), Bytes::from(error_msg.clone()));
                             Err(Response::builder().status(404).body(error_msg).unwrap())
                         }
                     }})
@@ -185,10 +180,7 @@ impl_web! {
                     error!("{}", error_msg);
                     let status_code = StatusCode::from_u16(400).unwrap();
                     let data = Bytes::from(error_msg.clone());
-                    // save the idempotency data, can do .wait() here? .then /
-                    // .and_then handling of the future resulted in type
-                    // mismatch errors with the next future.
-                    let _ret = store.write().save_idempotent_data(idempotency_key, status_code, data).wait();
+                    store.write().save_idempotent_data(idempotency_key, status_code, data);
                     Response::builder().status(400).body(error_msg).unwrap()
                 }}))
                 .and_then({clone_all!(store, idempotency_key); move |account_id| store.read().get_accounts(vec![account_id])
@@ -197,10 +189,7 @@ impl_web! {
                     error!("{}", error_msg);
                     let status_code = StatusCode::from_u16(404).unwrap();
                     let data = Bytes::from(error_msg.clone());
-                    // save the idempotency data, can do .wait() here? .then /
-                    // .and_then handling of the future resulted in type
-                    // mismatch errors with the next future.
-                    let _ret = store.write().save_idempotent_data(idempotency_key, status_code, data).wait();
+                    store.write().save_idempotent_data(idempotency_key, status_code, data);
                     Response::builder().status(404).body(error_msg).unwrap()
                 }})})
                 .and_then(|accounts| {
@@ -235,7 +224,7 @@ impl_web! {
                     .map_err({ clone_all!(store, idempotency_key); move |reject| {
                         let error_msg = format!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
                         error!("{}", error_msg);
-                        let _ret = store.write().save_idempotent_data(idempotency_key, StatusCode::from_u16(502).unwrap(), Bytes::from(error_msg.clone())).wait();
+                        store.write().save_idempotent_data(idempotency_key, StatusCode::from_u16(502).unwrap(), Bytes::from(error_msg.clone()));
                         Response::builder().status(502).body(error_msg).unwrap()
                     }})
                 }})

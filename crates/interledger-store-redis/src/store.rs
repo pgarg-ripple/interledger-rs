@@ -1193,7 +1193,7 @@ impl SettlementStore for RedisStore {
             .hset(idempotency_key.clone(), "status_code", status_code.as_u16())
             .ignore()
             .hset(idempotency_key.clone(), "data", data.as_ref())
-            .ignore() // Can we assume the data being passed is utf8? If so, maybe the funciton can take utf8 as argument.
+            .ignore()
             .expire(idempotency_key.clone(), 86400)
             .ignore();
         Box::new(
