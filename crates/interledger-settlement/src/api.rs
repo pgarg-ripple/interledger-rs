@@ -257,7 +257,6 @@ mod tests {
     use crate::test_helpers::*;
 
     // Settlement Tests
-
     mod settlement_tests {
         use super::*;
 
@@ -268,7 +267,13 @@ mod tests {
             let api = test_api(store.clone(), false);
 
             let ret: Response<_> = api
-                .receive_settlement(id.clone(), SETTLEMENT_BODY, IDEMPOTENCY.to_string())
+                .receive_settlement(
+                    id.clone(),
+                    SettlementData {
+                        amount: SETTLEMENT_BODY,
+                    },
+                    IDEMPOTENCY.to_string(),
+                )
                 .wait()
                 .unwrap();
             assert_eq!(ret.status(), 200);
@@ -276,7 +281,7 @@ mod tests {
 
             // check that it's idempotent
             let ret: Response<_> = api
-                .receive_settlement(id, 200, IDEMPOTENCY.to_string())
+                .receive_settlement(id, SettlementData { amount: 200 }, IDEMPOTENCY.to_string())
                 .wait()
                 .unwrap();
             assert_eq!(ret.status(), 200);
@@ -299,7 +304,13 @@ mod tests {
             let api = test_api(store.clone(), false);
 
             let ret: Response<_> = api
-                .receive_settlement(id.clone(), SETTLEMENT_BODY, IDEMPOTENCY.to_string())
+                .receive_settlement(
+                    id.clone(),
+                    SettlementData {
+                        amount: SETTLEMENT_BODY,
+                    },
+                    IDEMPOTENCY.to_string(),
+                )
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
@@ -307,7 +318,13 @@ mod tests {
 
             // check that it's idempotent
             let ret: Response<_> = api
-                .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
+                .receive_settlement(
+                    id,
+                    SettlementData {
+                        amount: SETTLEMENT_BODY,
+                    },
+                    IDEMPOTENCY.to_string(),
+                )
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
@@ -330,7 +347,13 @@ mod tests {
             let api = test_api(store, false);
 
             let ret: Response<_> = api
-                .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
+                .receive_settlement(
+                    id,
+                    SettlementData {
+                        amount: SETTLEMENT_BODY,
+                    },
+                    IDEMPOTENCY.to_string(),
+                )
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 500);
@@ -345,7 +368,13 @@ mod tests {
             let api = test_api(store.clone(), false);
 
             let ret: Response<_> = api
-                .receive_settlement(id.clone(), SETTLEMENT_BODY, IDEMPOTENCY.to_string())
+                .receive_settlement(
+                    id.clone(),
+                    SettlementData {
+                        amount: SETTLEMENT_BODY,
+                    },
+                    IDEMPOTENCY.to_string(),
+                )
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
@@ -353,14 +382,18 @@ mod tests {
 
             // check that it's idempotent
             let ret: Response<_> = api
-                .receive_settlement(id.clone(), 999, IDEMPOTENCY.to_string())
+                .receive_settlement(
+                    id.clone(),
+                    SettlementData { amount: 999 },
+                    IDEMPOTENCY.to_string(),
+                )
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
             assert_eq!(ret.body(), "Unable to parse account id: a");
 
             let _ret: Response<_> = api
-                .receive_settlement(id, 999, IDEMPOTENCY.to_string())
+                .receive_settlement(id, SettlementData { amount: 999 }, IDEMPOTENCY.to_string())
                 .wait()
                 .unwrap_err();
 
@@ -381,14 +414,26 @@ mod tests {
             let api = test_api(store.clone(), false);
 
             let ret: Response<_> = api
-                .receive_settlement(id.clone(), SETTLEMENT_BODY, IDEMPOTENCY.to_string())
+                .receive_settlement(
+                    id.clone(),
+                    SettlementData {
+                        amount: SETTLEMENT_BODY,
+                    },
+                    IDEMPOTENCY.to_string(),
+                )
                 .wait()
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
             assert_eq!(ret.body(), "Error getting account: 0");
 
             let ret: Response<_> = api
-                .receive_settlement(id, SETTLEMENT_BODY, IDEMPOTENCY.to_string())
+                .receive_settlement(
+                    id,
+                    SettlementData {
+                        amount: SETTLEMENT_BODY,
+                    },
+                    IDEMPOTENCY.to_string(),
+                )
                 .wait()
                 .unwrap_err(); // Bug that returns Result::OK
             assert_eq!(ret.status().as_u16(), 404);
@@ -526,6 +571,5 @@ mod tests {
             assert_eq!(cached_data.0, 404);
             assert_eq!(cached_data.1, &Bytes::from("Error getting account: 0"));
         }
-
     }
 }
