@@ -50,8 +50,6 @@ pub trait SettlementAccount: Account {
 pub trait SettlementStore {
     type Account: SettlementAccount;
 
-    /// Takes mutable reference to self because the store's fields may be
-    /// responsible for keeping track of the idempotency keys
     fn update_balance_for_incoming_settlement(
         &self,
         account_id: <Self::Account as Account>::AccountId,
@@ -61,16 +59,12 @@ pub trait SettlementStore {
 
     /// Returns the API response that was saved when the idempotency key was used
     /// If the key was not used, it must return None
-    /// Takes mutable reference to self because the store's fields may be
-    /// responsible for keeping track of the idempotency keys
     fn load_idempotent_data(
         &self,
         idempotency_key: String,
     ) -> Box<dyn Future<Item = Option<(StatusCode, Bytes)>, Error = ()> + Send>;
 
     /// Saves the data that was passed along with the api request for later
-    /// Takes mutable reference to self because the store's fields may be
-    /// responsible for keeping track of the idempotency keys
     fn save_idempotent_data(
         &self,
         idempotency_key: String,
