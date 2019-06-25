@@ -4,7 +4,7 @@ use futures::{
     Future,
 };
 use interledger_ildcp::IldcpAccount;
-use interledger_service_util::Convert;
+use interledger_service_util::{Convert, ConvertDetails};
 use reqwest::r#async::Client;
 use uuid::Uuid;
 
@@ -27,8 +27,10 @@ impl SettlementClient {
     ) -> impl Future<Item = (), Error = ()> {
         if let Some(settlement_engine) = account.settlement_engine_details() {
             let mut settlement_engine_url = settlement_engine.url;
-            let amount =
-                amount.normalize_scale(account.asset_scale(), settlement_engine.asset_scale);
+            let amount = amount.normalize_scale(ConvertDetails {
+                from: account.asset_scale(),
+                to: settlement_engine.asset_scale,
+            });
             settlement_engine_url
                 .path_segments_mut()
                 .expect("Invalid settlement engine URL")

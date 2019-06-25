@@ -8,7 +8,7 @@ use hyper::{Response, StatusCode};
 use interledger_ildcp::IldcpAccount;
 use interledger_packet::PrepareBuilder;
 use interledger_service::{AccountStore, OutgoingRequest, OutgoingService};
-use interledger_service_util::Convert;
+use interledger_service_util::{Convert, ConvertDetails};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::{
@@ -131,7 +131,10 @@ impl_web! {
                     }})
                     .and_then({clone_all!(store, idempotency_key); move |(account, settlement_engine)| {
                         let account_id = account.id();
-                        let amount = amount.normalize_scale(account.asset_scale(), settlement_engine.asset_scale);
+                        let amount = amount.normalize_scale(ConvertDetails {
+                            from: account.asset_scale(),
+                            to: settlement_engine.asset_scale
+                        });
                         store.write().update_balance_for_incoming_settlement(account_id, amount, idempotency_key)
                             .map_err(move |_| {
                                 let err = format!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
