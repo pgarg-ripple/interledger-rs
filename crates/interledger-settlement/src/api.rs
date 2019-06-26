@@ -48,7 +48,7 @@ impl_web! {
         }
 
         #[post("/accounts/:account_id/settlement")]
-        fn receive_settlement(&self, account_id: String, body: SettlementData, idempotency_key: String) -> impl Future<Item = Response<Bytes>, Error = Response<String>> {
+        fn receive_settlement(&self, account_id: String, body: SettlementData, idempotency_key: String) -> impl Future<Item = Response<Bytes>, Error = Response<Bytes>> {
             let amount = body.amount;
             // These clones are very ugly (but cheap since this is an Arc). They
             // are required due to the multiple moves inside the futures chain.
@@ -63,15 +63,13 @@ impl_web! {
             .map_err(move |err| {
                 let err = format!("Couldn't connect to store {:?}", err);
                 error!("{}", err);
-                Response::builder().status(500).body(err).unwrap()
+                Response::builder().status(500).body(Bytes::from(err)).unwrap()
             }).and_then(move |data: Option<(StatusCode, Bytes)>| {
                 if let Some(d) = data {
+                    let data = Response::builder().status(d.0).body(d.1).unwrap();
                     if d.0.is_success() {
-                        let data = Response::builder().status(d.0).body(d.1).unwrap();
                         return Either::A(Either::A(ok(data)));
                     } else {
-                        let body = String::from_utf8_lossy(&d.1.to_vec()).to_string();
-                        let data = Response::builder().status(d.0).body(body).unwrap();
                         return Either::A(Either::B(err(data)));
                     }
                 }
@@ -85,9 +83,9 @@ impl_web! {
                         let error_msg = format!("Unable to parse account id: {}", account_id);
                         error!("{}", error_msg);
                         let status_code = StatusCode::from_u16(400).unwrap();
-                        let data = Bytes::from(error_msg.clone());
-                        store.save_idempotent_data(idempotency_key, status_code, data);
-                        Response::builder().status(400).body(error_msg).unwrap()
+                        let data = Bytes::from(error_msg);
+                        store.save_idempotent_data(idempotency_key, status_code, data.clone());
+                        Response::builder().status(400).body(data).unwrap()
                     }}))
                     .and_then({
                         let store = store.clone();
@@ -102,9 +100,9 @@ impl_web! {
                             error!("{}", error_msg);
 
                             let status_code = StatusCode::from_u16(404).unwrap();
-                            let data = Bytes::from(error_msg.clone());
-                            store.save_idempotent_data(idempotency_key.clone(), status_code, data);
-                            Response::builder().status(404).body(error_msg).unwrap()
+                            let data = Bytes::from(error_msg);
+                            store.save_idempotent_data(idempotency_key.clone(), status_code, data.clone());
+                            Response::builder().status(404).body(data).unwrap()
                         }})
                     }})
                     .and_then({
@@ -117,8 +115,9 @@ impl_web! {
                         } else {
                             let error_msg = format!("Account {} does not have settlement engine details configured. Cannot handle incoming settlement", account.id());
                             error!("{}", error_msg);
-                            store.save_idempotent_data(idempotency_key, StatusCode::from_u16(404).unwrap(), Bytes::from(error_msg.clone()));
-                            Err(Response::builder().status(404).body(error_msg).unwrap())
+                            let data = Bytes::from(error_msg);
+                            store.save_idempotent_data(idempotency_key, StatusCode::from_u16(404).unwrap(), data.clone());
+                            Err(Response::builder().status(404).body(data).unwrap())
                         }
                     }})
                     .and_then({
@@ -134,7 +133,7 @@ impl_web! {
                             .map_err(move |_| {
                                 let err = format!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
                                 error!("{}", err);
-                                Response::builder().status(500).body(err).unwrap()
+                                Response::builder().status(500).body(Bytes::from(err)).unwrap()
                         })
                     }}).and_then({
                         let store = store.clone();
@@ -145,7 +144,7 @@ impl_web! {
                         .map_err(move |err| {
                             let err = format!("Couldn't connect to store {:?}", err);
                             error!("{}", err);
-                            Response::builder().status(500).body(err).unwrap()
+                            Response::builder().status(500).body(Bytes::from(err)).unwrap()
                         })
                         .and_then(|_| Ok(Response::builder().status(StatusCode::OK).body(ret).unwrap()))
                     }}))
@@ -156,7 +155,7 @@ impl_web! {
         // until it reaches the peer's settlement engine. Extract is not
         // implemented for Bytes unfortunately.
         #[post("/accounts/:account_id/messages")]
-        fn send_outgoing_message(&self, account_id: String, body: Vec<u8>, idempotency_key: String)-> impl Future<Item = Response<Bytes>, Error = Response<String>> {
+        fn send_outgoing_message(&self, account_id: String, body: Vec<u8>, idempotency_key: String)-> impl Future<Item = Response<Bytes>, Error = Response<Bytes>> {
             let store = self.store.clone();
             let mut outgoing_handler = self.outgoing_handler.clone();
 
@@ -165,15 +164,13 @@ impl_web! {
             .map_err(move |err| {
                 let err = format!("Couldn't connect to store {:?}", err);
                 error!("{}", err);
-                Response::builder().status(500).body(err).unwrap()
+                Response::builder().status(500).body(Bytes::from(err)).unwrap()
             }).and_then(move |data: Option<(StatusCode, Bytes)>| {
                 if let Some(d) = data {
+                    let data = Response::builder().status(d.0).body(d.1).unwrap();
                     if d.0.is_success() {
-                        let data = Response::builder().status(d.0).body(d.1).unwrap();
                         return Either::A(Either::A(ok(data)));
                     } else {
-                        let body = String::from_utf8(d.1.to_vec()).unwrap(); /// if success return bytes otherwise return string
-                        let data = Response::builder().status(d.0).body(body).unwrap();
                         return Either::A(Either::B(err(data)));
                     }
                 }
@@ -187,9 +184,9 @@ impl_web! {
                     let error_msg = format!("Unable to parse account id: {}", account_id);
                     error!("{}", error_msg);
                     let status_code = StatusCode::from_u16(400).unwrap();
-                    let data = Bytes::from(error_msg.clone());
-                    store.save_idempotent_data(idempotency_key, status_code, data);
-                    Response::builder().status(400).body(error_msg).unwrap()
+                    let data = Bytes::from(error_msg);
+                    store.save_idempotent_data(idempotency_key, status_code, data.clone());
+                    Response::builder().status(400).body(data).unwrap()
                 }}))
                 .and_then({
                     let store = store.clone();
@@ -201,9 +198,9 @@ impl_web! {
                     let error_msg = format!("Error getting account: {}", account_id);
                     error!("{}", error_msg);
                     let status_code = StatusCode::from_u16(404).unwrap();
-                    let data = Bytes::from(error_msg.clone());
-                    store.save_idempotent_data(idempotency_key, status_code, data);
-                    Response::builder().status(404).body(error_msg).unwrap()
+                    let data = Bytes::from(error_msg);
+                    store.save_idempotent_data(idempotency_key, status_code, data.clone());
+                    Response::builder().status(404).body(data).unwrap()
                 }})})
                 .and_then(|accounts| {
                     let account = &accounts[0];
@@ -212,7 +209,7 @@ impl_web! {
                     } else {
                         let err = format!("Account {} has no settlement engine details configured, cannot send a settlement engine message to that account", accounts[0].id());
                         error!("{}", err);
-                        Err(Response::builder().status(404).body(err).unwrap())
+                        Err(Response::builder().status(404).body(Bytes::from(err)).unwrap())
                     }
                 })
                 .and_then({
@@ -241,8 +238,9 @@ impl_web! {
                         move |reject| {
                         let error_msg = format!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
                         error!("{}", error_msg);
-                        store.save_idempotent_data(idempotency_key, StatusCode::from_u16(502).unwrap(), Bytes::from(error_msg.clone()));
-                        Response::builder().status(502).body(error_msg).unwrap()
+                        let data = Bytes::from(error_msg);
+                        store.save_idempotent_data(idempotency_key, StatusCode::from_u16(502).unwrap(), data.clone());
+                        Response::builder().status(502).body(data).unwrap()
                     }})
                 }})
                 .and_then({
@@ -252,7 +250,7 @@ impl_web! {
                     .map_err(move |err| {
                         let err = format!("Couldn't connect to store {:?}", err);
                         error!("{}", err);
-                        Response::builder().status(500).body(err).unwrap()
+                        Response::builder().status(500).body(Bytes::from(err)).unwrap()
                     })
                     .and_then(|_| Ok(
                         Response::builder().status(200).body(data).unwrap()
