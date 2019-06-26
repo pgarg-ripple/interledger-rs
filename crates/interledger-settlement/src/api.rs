@@ -31,22 +31,6 @@ pub struct SettlementApi<S, O, A> {
     account_type: PhantomData<A>,
 }
 
-macro_rules! clone_all {
-    ($i:ident) => {
-        let $i = $i.clone();
-    };
-    ($i:ident, $($tt:tt)*) => {
-        clone_all!($i);
-        clone_all!($($tt)*);
-    };
-    ($this:ident . $i:ident) => {
-        let $i = $this.$i.clone();
-    };
-    ($this:ident . $i:ident, $($tt:tt)*) => {
-        clone_all!($this . $i);
-        clone_all!($($tt)*);
-    };
-}
 // TODO add authentication
 impl_web! {
     impl<S, O, A> SettlementApi<S, O, A>
@@ -94,7 +78,10 @@ impl_web! {
 
                 Either::B(
                     result(A::AccountId::from_str(&account_id)
-                    .map_err({ clone_all!(store, idempotency_key); move |_err| {
+                    .map_err({
+                        let store = store.clone();
+                        let idempotency_key = idempotency_key.clone();
+                        move |_err| {
                         let error_msg = format!("Unable to parse account id: {}", account_id);
                         error!("{}", error_msg);
                         let status_code = StatusCode::from_u16(400).unwrap();
@@ -102,9 +89,15 @@ impl_web! {
                         store.save_idempotent_data(idempotency_key, status_code, data);
                         Response::builder().status(400).body(error_msg).unwrap()
                     }}))
-                    .and_then({clone_all!(store, idempotency_key); move |account_id| {
+                    .and_then({
+                        let store = store.clone();
+                        let idempotency_key = idempotency_key.clone();
+                        move |account_id| {
                         store.get_accounts(vec![account_id])
-                        .map_err({ clone_all!(store, idempotency_key); move |_err| {
+                        .map_err({
+                            let store = store.clone();
+                            let idempotency_key = idempotency_key.clone();
+                            move |_err| {
                             let error_msg = format!("Error getting account: {}", account_id);
                             error!("{}", error_msg);
 
@@ -114,7 +107,10 @@ impl_web! {
                             Response::builder().status(404).body(error_msg).unwrap()
                         }})
                     }})
-                    .and_then({clone_all!(store, idempotency_key); move |accounts| {
+                    .and_then({
+                        let store = store.clone();
+                        let idempotency_key = idempotency_key.clone();
+                        move |accounts| {
                         let account = &accounts[0];
                         if let Some(settlement_engine) = account.settlement_engine_details() {
                             Ok((account.clone(), settlement_engine))
@@ -125,7 +121,10 @@ impl_web! {
                             Err(Response::builder().status(404).body(error_msg).unwrap())
                         }
                     }})
-                    .and_then({clone_all!(store, idempotency_key); move |(account, settlement_engine)| {
+                    .and_then({
+                        let store = store.clone();
+                        let idempotency_key = idempotency_key.clone();
+                        move |(account, settlement_engine)| {
                         let account_id = account.id();
                         let amount = amount.normalize_scale(ConvertDetails {
                             from: account.asset_scale(),
@@ -137,7 +136,10 @@ impl_web! {
                                 error!("{}", err);
                                 Response::builder().status(500).body(err).unwrap()
                         })
-                    }}).and_then({clone_all!(store, idempotency_key); move |_| {
+                    }}).and_then({
+                        let store = store.clone();
+                        let idempotency_key = idempotency_key.clone();
+                        move |_| {
                         let ret = Bytes::from("Success");
                         store.save_idempotent_data(idempotency_key, StatusCode::OK, ret.clone())
                         .map_err(move |err| {
@@ -159,8 +161,7 @@ impl_web! {
             let mut outgoing_handler = self.outgoing_handler.clone();
 
             // Check store for idempotency key. If exists, return cached data
-            let s = self.store.clone();
-            s.load_idempotent_data(idempotency_key.clone())
+            self.store.load_idempotent_data(idempotency_key.clone())
             .map_err(move |err| {
                 let err = format!("Couldn't connect to store {:?}", err);
                 error!("{}", err);
@@ -179,7 +180,10 @@ impl_web! {
 
                 Either::B(
                 result(A::AccountId::from_str(&account_id)
-                .map_err({ clone_all!(store, idempotency_key); move |_err| {
+                .map_err({
+                    let store = store.clone();
+                    let idempotency_key = idempotency_key.clone();
+                    move |_err| {
                     let error_msg = format!("Unable to parse account id: {}", account_id);
                     error!("{}", error_msg);
                     let status_code = StatusCode::from_u16(400).unwrap();
@@ -187,8 +191,13 @@ impl_web! {
                     store.save_idempotent_data(idempotency_key, status_code, data);
                     Response::builder().status(400).body(error_msg).unwrap()
                 }}))
-                .and_then({clone_all!(store, idempotency_key); move |account_id| store.get_accounts(vec![account_id])
-                .map_err({clone_all!(store, idempotency_key); move |_| {
+                .and_then({
+                    let store = store.clone();
+                    let idempotency_key = idempotency_key.clone();
+                    move |account_id|
+                store.get_accounts(vec![account_id])
+                .map_err({
+                    move |_| {
                     let error_msg = format!("Error getting account: {}", account_id);
                     error!("{}", error_msg);
                     let status_code = StatusCode::from_u16(404).unwrap();
@@ -206,7 +215,10 @@ impl_web! {
                         Err(Response::builder().status(404).body(err).unwrap())
                     }
                 })
-                .and_then({ clone_all!(store, idempotency_key) ;move |(account, settlement_engine)| {
+                .and_then({
+                    let store = store.clone();
+                    let idempotency_key = idempotency_key.clone();
+                    move |(account, settlement_engine)| {
                     // Send the message to the peer's settlement engine.
                     // Note that we use dummy values for the `from` and `original_amount`
                     // because this `OutgoingRequest` will bypass the router and thus will not
@@ -225,14 +237,16 @@ impl_web! {
                             execution_condition: &PEER_PROTOCOL_CONDITION,
                         }.build()
                     })
-                    .map_err({ clone_all!(store, idempotency_key); move |reject| {
+                    .map_err({
+                        move |reject| {
                         let error_msg = format!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
                         error!("{}", error_msg);
                         store.save_idempotent_data(idempotency_key, StatusCode::from_u16(502).unwrap(), Bytes::from(error_msg.clone()));
                         Response::builder().status(502).body(error_msg).unwrap()
                     }})
                 }})
-                .and_then({ clone_all!(store, idempotency_key); move |fulfill| {
+                .and_then({
+                    move |fulfill| {
                     let data = Bytes::from(fulfill.data());
                     store.save_idempotent_data(idempotency_key, StatusCode::OK, data.clone())
                     .map_err(move |err| {
