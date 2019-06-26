@@ -72,14 +72,6 @@ impl_web! {
         #[post("/accounts/:account_id/settlement")]
         fn receive_settlement(&self, account_id: String, body: SettlementData, idempotency_key: String) -> impl Future<Item = Response<Bytes>, Error = Response<Bytes>> {
             let amount = body.amount;
-            // These clones are very ugly (but cheap since this is an Arc). They
-            // are required due to the multiple moves inside the futures chain.
-            // Can we remove them in some smart way?
-            // https://github.com/rust-lang/rfcs/issues/2407
-            // https://users.rust-lang.org/t/automatic-cloning-for-closures/2578
-            // Tried `enclose` macro, doesn't behave well with future chains
-
-            // Check store for idempotency key. If exists, return cached data
             let store = self.store.clone();
 
             self.check_idempotency(idempotency_key.clone()).map_err(|res| {
