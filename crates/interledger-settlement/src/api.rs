@@ -47,6 +47,28 @@ impl_web! {
             }
         }
 
+        fn check_idempotency(
+            &self,
+            idempotency_key: String
+        ) -> impl Future<Item = Option<(StatusCode, Bytes)>, Error = (StatusCode, Bytes)> {
+            self.store.load_idempotent_data(idempotency_key.clone())
+            .map_err(move |err| {
+                let err = format!("Couldn't connect to store {:?}", err);
+                error!("{}", err);
+                (StatusCode::from_u16(500).unwrap(), Bytes::from(err))
+            }).and_then(move |ret: Option<(StatusCode, Bytes)>| {
+                    if let Some(d) = ret {
+                        if d.0.is_success() {
+                            return Either::A(Either::A(ok(Some((d.0, d.1)))))
+                        } else {
+                            return Either::A(Either::B(err((d.0, d.1))))
+                        }
+                    }
+                    Either::B(ok(None))
+                }
+            )
+        }
+
         #[post("/accounts/:account_id/settlement")]
         fn receive_settlement(&self, account_id: String, body: SettlementData, idempotency_key: String) -> impl Future<Item = Response<Bytes>, Error = Response<Bytes>> {
             let amount = body.amount;
@@ -59,21 +81,14 @@ impl_web! {
 
             // Check store for idempotency key. If exists, return cached data
             let store = self.store.clone();
-            self.store.load_idempotent_data(idempotency_key.clone())
-            .map_err(move |err| {
-                let err = format!("Couldn't connect to store {:?}", err);
-                error!("{}", err);
-                Response::builder().status(500).body(Bytes::from(err)).unwrap()
-            }).and_then(move |data: Option<(StatusCode, Bytes)>| {
-                if let Some(d) = data {
-                    let data = Response::builder().status(d.0).body(d.1).unwrap();
-                    if d.0.is_success() {
-                        return Either::A(Either::A(ok(data)));
-                    } else {
-                        return Either::A(Either::B(err(data)));
-                    }
-                }
 
+            self.check_idempotency(idempotency_key.clone()).map_err(|res| {
+                Response::builder().status(res.0).body(res.1).unwrap()
+            })
+            .and_then(move |ret: Option<(StatusCode, Bytes)>| {
+                if let Some(d) = ret {
+                    return Either::A(ok(Response::builder().status(d.0).body(d.1).unwrap()));
+                }
                 Either::B(
                     result(A::AccountId::from_str(&account_id)
                     .map_err({
@@ -159,22 +174,13 @@ impl_web! {
             let store = self.store.clone();
             let mut outgoing_handler = self.outgoing_handler.clone();
 
-            // Check store for idempotency key. If exists, return cached data
-            self.store.load_idempotent_data(idempotency_key.clone())
-            .map_err(move |err| {
-                let err = format!("Couldn't connect to store {:?}", err);
-                error!("{}", err);
-                Response::builder().status(500).body(Bytes::from(err)).unwrap()
-            }).and_then(move |data: Option<(StatusCode, Bytes)>| {
-                if let Some(d) = data {
-                    let data = Response::builder().status(d.0).body(d.1).unwrap();
-                    if d.0.is_success() {
-                        return Either::A(Either::A(ok(data)));
-                    } else {
-                        return Either::A(Either::B(err(data)));
-                    }
+            self.check_idempotency(idempotency_key.clone()).map_err(|res| {
+                Response::builder().status(res.0).body(res.1).unwrap()
+            })
+            .and_then(move |ret: Option<(StatusCode, Bytes)>| {
+                if let Some(d) = ret {
+                    return Either::A(ok(Response::builder().status(d.0).body(d.1).unwrap()));
                 }
-
                 Either::B(
                 result(A::AccountId::from_str(&account_id)
                 .map_err({
