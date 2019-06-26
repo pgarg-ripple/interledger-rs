@@ -6,6 +6,7 @@ use futures::{
     Future, Stream,
 };
 use hashbrown::{HashMap, HashSet};
+
 use hyper::StatusCode;
 use interledger_api::{AccountDetails, NodeStore};
 use interledger_btp::BtpStore;
@@ -20,6 +21,7 @@ use redis::{
     self, cmd, r#async::SharedConnection, Client, ConnectionInfo, PipelineCommands, Value,
 };
 use ring::{aead, hmac};
+use std::collections::HashMap as SlowHashMap;
 use std::{
     iter::FromIterator,
     str,
@@ -112,14 +114,13 @@ local idempotency_key = ARGV[3]
 local balance, prepaid_amount = unpack(redis.call('HMGET', account, 'balance', 'prepaid_amount'))
 
 -- If idempotency key has been used, then do not perform any operations
-local exists = redis.call('GET', idempotency_key)
-if exists == '1' then
+if redis.call('EXISTS', idempotency_key) == 1 then
     return balance + prepaid_amount
 end
 
 -- Otherwise, set it to true (there's no value to cached as a response)
 -- and make it expire after 24h (86400 sec)
-redis.call('SET', idempotency_key, '1', 'EX', 86400)
+redis.call('SET', idempotency_key, 'true', 'EX', 86400)
 
 -- Credit the incoming settlement to the balance and/or prepaid amount,
 -- depending on whether that account currently owes money or not
@@ -1163,22 +1164,27 @@ impl SettlementStore for RedisStore {
                         idempotency_key_clone, err
                     )
                 })
-                .and_then(move |(_connection, ret): (_, Vec<String>)| {
-                    // even elements represent the key
-                    // odd elements represent the value
-                    // there must be 4 elements, a status code and a data value
-                    // stored there
-                    let data = if ret.len() == 4 {
-                        trace!("Loaded idempotency key {} - {:?}", idempotency_key, ret);
-                        Some((
-                            StatusCode::from_str(&ret[1]).unwrap(),
-                            Bytes::from(ret[3].clone()),
-                        ))
-                    } else {
-                        None
-                    };
-                    Ok(data)
-                }),
+                .and_then(
+                    move |(_connection, ret): (_, SlowHashMap<String, String>)| {
+                        // even elements represent the key
+                        // odd elements represent the value
+                        // there must be 4 elements, a status code and a data value
+                        // stored there
+
+                        let data = if let (Some(status_code), Some(data)) =
+                            (ret.get("status_code"), ret.get("data"))
+                        {
+                            trace!("Loaded idempotency key {} - {:?}", idempotency_key, ret);
+                            Some((
+                                StatusCode::from_str(status_code).unwrap(),
+                                Bytes::from(data.clone()),
+                            ))
+                        } else {
+                            None
+                        };
+                        Ok(data)
+                    },
+                ),
         )
     }
 
@@ -1190,9 +1196,12 @@ impl SettlementStore for RedisStore {
     ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
         let mut pipe = redis::pipe();
         pipe.atomic()
-            .hset(idempotency_key.clone(), "status_code", status_code.as_u16())
-            .ignore()
-            .hset(idempotency_key.clone(), "data", data.as_ref())
+            .cmd("HMSET") // cannot use hset_multiple since data and status_code have different types
+            .arg(idempotency_key.clone())
+            .arg("status_code")
+            .arg(status_code.as_u16())
+            .arg("data")
+            .arg(data.as_ref())
             .ignore()
             .expire(idempotency_key.clone(), 86400)
             .ignore();
