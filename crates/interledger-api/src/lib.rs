@@ -15,10 +15,8 @@ use interledger_router::RouterStore;
 use interledger_service::{Account as AccountTrait, IncomingService, OutgoingService};
 use interledger_service_util::{BalanceStore, ExchangeRateStore};
 use interledger_settlement::{SettlementAccount, SettlementApi, SettlementStore};
-use parking_lot::RwLock;
 use serde::Serialize;
 use std::str;
-use std::sync::Arc;
 use tower_web::{net::ConnectionStream, ServiceBuilder};
 
 mod routes;
@@ -170,7 +168,7 @@ where
     {
         ServiceBuilder::new()
             .resource(SettlementApi::new(
-                Arc::new(RwLock::new(self.store.clone())),
+                self.store.clone(),
                 self.outgoing_handler.clone(),
             ))
             .serve(incoming)

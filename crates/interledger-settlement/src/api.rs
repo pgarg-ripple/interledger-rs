@@ -9,8 +9,6 @@ use interledger_ildcp::IldcpAccount;
 use interledger_packet::PrepareBuilder;
 use interledger_service::{AccountStore, OutgoingRequest, OutgoingService};
 use interledger_service_util::{Convert, ConvertDetails};
-use parking_lot::RwLock;
-use std::sync::Arc;
 use std::{
     marker::PhantomData,
     str::{self, FromStr},
@@ -29,7 +27,7 @@ struct SettlementData {
 
 pub struct SettlementApi<S, O, A> {
     outgoing_handler: O,
-    store: Arc<RwLock<S>>,
+    store: S,
     account_type: PhantomData<A>,
 }
 
@@ -57,7 +55,7 @@ impl_web! {
         O: OutgoingService<A> + Clone + Send + Sync + 'static,
         A: SettlementAccount + IldcpAccount + Send + Sync + 'static,
     {
-        pub fn new(store: Arc<RwLock<S>>, outgoing_handler: O) -> Self {
+        pub fn new(store: S, outgoing_handler: O) -> Self {
             SettlementApi {
                 store,
                 outgoing_handler,
@@ -75,11 +73,9 @@ impl_web! {
             // https://users.rust-lang.org/t/automatic-cloning-for-closures/2578
             // Tried `enclose` macro, doesn't behave well with future chains
 
-            let store = Arc::clone(&self.store);
-
             // Check store for idempotency key. If exists, return cached data
-            let s = self.store.read();
-            s.load_idempotent_data(idempotency_key.clone())
+            let store = self.store.clone();
+            self.store.load_idempotent_data(idempotency_key.clone())
             .map_err(move |err| {
                 let err = format!("Couldn't connect to store {:?}", err);
                 error!("{}", err);
@@ -103,18 +99,18 @@ impl_web! {
                         error!("{}", error_msg);
                         let status_code = StatusCode::from_u16(400).unwrap();
                         let data = Bytes::from(error_msg.clone());
-                        store.write().save_idempotent_data(idempotency_key, status_code, data);
+                        store.save_idempotent_data(idempotency_key, status_code, data);
                         Response::builder().status(400).body(error_msg).unwrap()
                     }}))
                     .and_then({clone_all!(store, idempotency_key); move |account_id| {
-                        store.read().get_accounts(vec![account_id])
+                        store.get_accounts(vec![account_id])
                         .map_err({ clone_all!(store, idempotency_key); move |_err| {
                             let error_msg = format!("Error getting account: {}", account_id);
                             error!("{}", error_msg);
 
                             let status_code = StatusCode::from_u16(404).unwrap();
                             let data = Bytes::from(error_msg.clone());
-                            store.write().save_idempotent_data(idempotency_key.clone(), status_code, data);
+                            store.save_idempotent_data(idempotency_key.clone(), status_code, data);
                             Response::builder().status(404).body(error_msg).unwrap()
                         }})
                     }})
@@ -125,7 +121,7 @@ impl_web! {
                         } else {
                             let error_msg = format!("Account {} does not have settlement engine details configured. Cannot handle incoming settlement", account.id());
                             error!("{}", error_msg);
-                            store.write().save_idempotent_data(idempotency_key, StatusCode::from_u16(404).unwrap(), Bytes::from(error_msg.clone()));
+                            store.save_idempotent_data(idempotency_key, StatusCode::from_u16(404).unwrap(), Bytes::from(error_msg.clone()));
                             Err(Response::builder().status(404).body(error_msg).unwrap())
                         }
                     }})
@@ -135,7 +131,7 @@ impl_web! {
                             from: account.asset_scale(),
                             to: settlement_engine.asset_scale
                         });
-                        store.write().update_balance_for_incoming_settlement(account_id, amount, idempotency_key)
+                        store.update_balance_for_incoming_settlement(account_id, amount, idempotency_key)
                             .map_err(move |_| {
                                 let err = format!("Error updating balance of account: {} for incoming settlement of amount: {}", account_id, amount);
                                 error!("{}", err);
@@ -143,7 +139,7 @@ impl_web! {
                         })
                     }}).and_then({clone_all!(store, idempotency_key); move |_| {
                         let ret = Bytes::from("Success");
-                        store.write().save_idempotent_data(idempotency_key, StatusCode::OK, ret.clone())
+                        store.save_idempotent_data(idempotency_key, StatusCode::OK, ret.clone())
                         .map_err(move |err| {
                             let err = format!("Couldn't connect to store {:?}", err);
                             error!("{}", err);
@@ -163,7 +159,7 @@ impl_web! {
             let mut outgoing_handler = self.outgoing_handler.clone();
 
             // Check store for idempotency key. If exists, return cached data
-            let s = self.store.read();
+            let s = self.store.clone();
             s.load_idempotent_data(idempotency_key.clone())
             .map_err(move |err| {
                 let err = format!("Couldn't connect to store {:?}", err);
@@ -188,16 +184,16 @@ impl_web! {
                     error!("{}", error_msg);
                     let status_code = StatusCode::from_u16(400).unwrap();
                     let data = Bytes::from(error_msg.clone());
-                    store.write().save_idempotent_data(idempotency_key, status_code, data);
+                    store.save_idempotent_data(idempotency_key, status_code, data);
                     Response::builder().status(400).body(error_msg).unwrap()
                 }}))
-                .and_then({clone_all!(store, idempotency_key); move |account_id| store.read().get_accounts(vec![account_id])
+                .and_then({clone_all!(store, idempotency_key); move |account_id| store.get_accounts(vec![account_id])
                 .map_err({clone_all!(store, idempotency_key); move |_| {
                     let error_msg = format!("Error getting account: {}", account_id);
                     error!("{}", error_msg);
                     let status_code = StatusCode::from_u16(404).unwrap();
                     let data = Bytes::from(error_msg.clone());
-                    store.write().save_idempotent_data(idempotency_key, status_code, data);
+                    store.save_idempotent_data(idempotency_key, status_code, data);
                     Response::builder().status(404).body(error_msg).unwrap()
                 }})})
                 .and_then(|accounts| {
@@ -232,13 +228,13 @@ impl_web! {
                     .map_err({ clone_all!(store, idempotency_key); move |reject| {
                         let error_msg = format!("Error sending message to peer settlement engine. Packet rejected with code: {}, message: {}", reject.code(), str::from_utf8(reject.message()).unwrap_or_default());
                         error!("{}", error_msg);
-                        store.write().save_idempotent_data(idempotency_key, StatusCode::from_u16(502).unwrap(), Bytes::from(error_msg.clone()));
+                        store.save_idempotent_data(idempotency_key, StatusCode::from_u16(502).unwrap(), Bytes::from(error_msg.clone()));
                         Response::builder().status(502).body(error_msg).unwrap()
                     }})
                 }})
                 .and_then({ clone_all!(store, idempotency_key); move |fulfill| {
                     let data = Bytes::from(fulfill.data());
-                    store.write().save_idempotent_data(idempotency_key, StatusCode::OK, data.clone())
+                    store.save_idempotent_data(idempotency_key, StatusCode::OK, data.clone())
                     .map_err(move |err| {
                         let err = format!("Couldn't connect to store {:?}", err);
                         error!("{}", err);
@@ -290,7 +286,7 @@ mod tests {
             assert_eq!(ret.status(), 200);
             assert_eq!(ret.body(), "Success");
 
-            let s = store.read();
+            let s = store.clone();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
 
@@ -333,7 +329,7 @@ mod tests {
             assert_eq!(ret.status().as_u16(), 404);
             assert_eq!(ret.body(), "Account 0 does not have settlement engine details configured. Cannot handle incoming settlement");
 
-            let s = store.read();
+            let s = store.clone();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
 
@@ -400,7 +396,7 @@ mod tests {
                 .wait()
                 .unwrap_err();
 
-            let s = store.read();
+            let s = store.clone();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
 
@@ -413,7 +409,7 @@ mod tests {
         #[test]
         fn account_not_in_store() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
-            let store = Arc::new(RwLock::new(TestStore::new(vec![], false)));
+            let store = TestStore::new(vec![], false);
             let api = test_api(store.clone(), false);
 
             let ret: Response<_> = api
@@ -442,7 +438,7 @@ mod tests {
             assert_eq!(ret.status().as_u16(), 404);
             assert_eq!(ret.body(), "Error getting account: 0");
 
-            let s = store.read();
+            let s = store.clone();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
             let cache_hits = s.cache_hits.read();
@@ -475,7 +471,7 @@ mod tests {
             assert_eq!(ret.status(), StatusCode::OK);
             assert_eq!(ret.body(), &Bytes::from("hello!"));
 
-            let s = store.read();
+            let s = store.clone();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
             let cache_hits = s.cache_hits.read();
@@ -502,7 +498,7 @@ mod tests {
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 502);
 
-            let s = store.read();
+            let s = store.clone();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
             let cache_hits = s.cache_hits.read();
@@ -537,7 +533,7 @@ mod tests {
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 400);
 
-            let s = store.read();
+            let s = store.clone();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
 
@@ -550,7 +546,7 @@ mod tests {
         #[test]
         fn account_not_in_store() {
             let id = TEST_ACCOUNT_0.clone().id.to_string();
-            let store = Arc::new(RwLock::new(TestStore::new(vec![], false)));
+            let store = TestStore::new(vec![], false);
             let api = test_api(store.clone(), true);
 
             let ret: Response<_> = api
@@ -565,7 +561,7 @@ mod tests {
                 .unwrap_err();
             assert_eq!(ret.status().as_u16(), 404);
 
-            let s = store.read();
+            let s = store.clone();
             let cache = s.cache.read();
             let cached_data = cache.get(&IDEMPOTENCY.to_string()).unwrap();
 

@@ -206,15 +206,15 @@ pub fn test_service(
     )
 }
 
-pub fn test_store(store_fails: bool, account_has_engine: bool) -> Arc<RwLock<TestStore>> {
+pub fn test_store(store_fails: bool, account_has_engine: bool) -> TestStore {
     let mut acc = TEST_ACCOUNT_0.clone();
     acc.no_details = !account_has_engine;
 
-    Arc::new(RwLock::new(TestStore::new(vec![acc], store_fails)))
+    TestStore::new(vec![acc], store_fails)
 }
 
 pub fn test_api(
-    test_store: Arc<RwLock<TestStore>>,
+    test_store: TestStore,
     should_fulfill: bool,
 ) -> SettlementApi<TestStore, impl OutgoingService<TestAccount> + Clone + Send + Sync, TestAccount>
 {
