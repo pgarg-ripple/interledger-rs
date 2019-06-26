@@ -23,7 +23,7 @@ RUN apk --no-cache add \
     redis
 
 # Install localtunnel
-RUN npm install localtunnel request request-promise-native
+RUN npm install localtunnel
 
 # Build run script
 WORKDIR /usr/src
@@ -34,4 +34,17 @@ COPY --from=rust \
     /usr/src/target/x86_64-unknown-linux-musl/debug/interledger \
     /usr/local/bin/interledger
 
+# Copy Settlement Engine
+# COPY .......
+
+# Run Redis
+h
+# Generate config file
+
+# Run settlement engine
+
+# Expose port to the world with lt and run node
 CMD ["node", "./run-interledger-node.js"]
+
+# Expose 7770 to the world
+# 7771 and 3000 are used for the Node Settlement API to speak to the Settlement Engine

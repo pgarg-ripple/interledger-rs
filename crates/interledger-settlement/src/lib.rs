@@ -27,6 +27,7 @@ pub use api::SettlementApi;
 pub use client::SettlementClient;
 pub use message_service::SettlementMessageService;
 
+#[derive(Debug)]
 pub struct SettlementEngineDetails {
     /// Base URL of the settlement engine
     pub url: Url,

@@ -276,6 +276,7 @@ impl RedisStore {
         &self,
         account: AccountDetails,
     ) -> Box<dyn Future<Item = Account, Error = ()> + Send> {
+        println!("INSERTING ACCOUNT {:#?}", account);
         let connection = self.connection.clone();
         let routing_table = self.routes.clone();
         let encryption_key = self.encryption_key.clone();
@@ -343,6 +344,19 @@ impl RedisStore {
 
                     // Set balance-related details
                     pipe.hset_multiple(account_details_key(account.id), &[("balance", 0), ("prepaid_amount", 0)]).ignore();
+
+                    // Set settlement-related details
+                    if let Some(ref se_url) = account.settlement_engine_url {
+                        pipe.hset(account_details_key(account.id), "settlement_engine_url", se_url.to_string());
+                    }
+
+                    if let Some(se_asset_scale) = account.settlement_engine_asset_scale {
+                        pipe.hset(account_details_key(account.id), "settlement_engine_asset_scale", se_asset_scale);
+                    }
+
+                    if let Some(ref se_ilp_addr) = account.settlement_engine_ilp_address {
+                        pipe.hset(account_details_key(account.id), "settlement_engine_ilp_address", se_ilp_addr.to_string());
+                    }
 
                     // Set incoming auth details
                     if let Some(auth) = btp_incoming_token_hmac_clone {

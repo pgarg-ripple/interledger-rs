@@ -257,6 +257,25 @@ impl InterledgerNode {
 
     /// Run the node on the default Tokio runtime
     pub fn run(&self) {
+        // ugly multistrings
+        println!(
+            "Running ILP Node.\n
+------------------\n
+Listening on:\n
+BTP: {:?}\n
+API: {:?}\n 
+Settlement: {:?} -- DO NOT EXPOSE THIS!\n
+Redis: {:?} -- DO NOT EXPOSE THIS!
+------------------\n
+API Keys:\n
+Admin API: {}\n
+",
+            self.btp_address,
+            self.http_address,
+            self.settlement_address,
+            self.redis_connection,
+            self.admin_auth_token,
+        );
         tokio::run(self.serve());
     }
 

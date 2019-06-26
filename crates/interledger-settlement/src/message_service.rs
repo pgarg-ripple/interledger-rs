@@ -61,6 +61,7 @@ where
                     .push("accounts")
                     .push(&request.from.id().to_string())
                     .push("messages"); // Maybe set the idempotency flag here in the headers
+                error!("SENDING A MESSAGE TO THE SE {:?}", settlement_engine_url);
                 return Box::new(self.http_client.post(settlement_engine_url)
                 .header("Content-Type", "application/octet-stream")
                 .body(message)
@@ -108,16 +109,18 @@ where
                     }
                 }));
             } else {
-                error!("Got settlement packet from account {} but there is no settlement engine url configured for it", request.from.id());
+                let error_msg = format!("Got settlement packet from account {} but there is no settlement engine url configured for it. SE address is {}, while the prepare packet's destination was {}", request.from.id(), settlement_engine_details.ilp_address, request.prepare.destination());
+                error!("{}", error_msg);
                 return Box::new(err(RejectBuilder {
                     code: ErrorCode::F02_UNREACHABLE,
-                    message: format!("Got settlement packet from account {} but there is no settlement engine url configured for it", request.from.id()).as_str().as_ref(),
+                    message: error_msg.as_ref(),
                     data: &[],
                     triggered_by: Some(&ilp_address),
                 }
                 .build()));
             }
         }
+        error!("NO ENGINE DETAILS FOUND IN FROM, FORWARDING TO NEXT LAYER");
         Box::new(self.next.handle_request(request))
     }
 }

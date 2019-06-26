@@ -208,6 +208,7 @@ impl_web! {
                         let err = format!("Account {} has no settlement engine details configured, cannot send a settlement engine message to that account", accounts[0].id());
                         error!("{}", err);
                         Err(Response::builder().status(404).body(Bytes::from(err)).unwrap())
+                        // TODO: This should not be a 404..?
                     }
                 })
                 .and_then({
@@ -220,6 +221,8 @@ impl_web! {
                     // use either of these values. Including dummy values in the rare case where
                     // we do not need them seems easier than using
                     // `Option`s all over the place.
+                    error!("SE Address: {}. Destination: {:?}",
+                        settlement_engine.ilp_address, account.settlement_engine_details());
                     outgoing_handler.send_request(OutgoingRequest {
                         from: account.clone(),
                         to: account.clone(),
