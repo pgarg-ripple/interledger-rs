@@ -1,5 +1,5 @@
 use super::types::{Addresses, EthereumAccount, EthereumLedgerTxSigner, EthereumStore};
-use super::utils::{make_tx, sent_to_us};
+use super::utils::{make_tx, sent_to_us, transfer_logs, ERC20Transfer};
 use clarity::Signature;
 use log::{debug, error, trace};
 use sha3::{Digest, Keccak256 as Sha3};
@@ -8,10 +8,10 @@ use std::iter::FromIterator;
 
 use ethereum_tx_sign::web3::{
     api::Web3,
-    futures::future::{err, ok, result, Either, Future},
+    futures::future::{err, join_all, ok, result, Either, Future},
     futures::stream::Stream,
     transports::Http,
-    types::{Address, BlockNumber, TransactionId, H256, U256},
+    types::{Address, BlockNumber, CallRequest, TransactionId, H256, U256},
 };
 use hyper::StatusCode;
 use reqwest::r#async::{Client, Response as HttpResponse};
@@ -30,6 +30,7 @@ use uuid::Uuid;
 use crate::{ApiResponse, Quantity, SettlementEngine};
 
 const MAX_RETRIES: usize = 10;
+const ETH_CREATE_ACCOUNT_PREFIX: &[u8] = b"ilp-ethl-create-account-message";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PaymentDetailsResponse {
@@ -51,7 +52,7 @@ impl PaymentDetailsResponse {
 /// functions are exposed via the Settlement Engine API.
 ///
 /// It requires a `confirmations` security parameter which is used to ensure
-/// that all transactions that get credited to the connector have sufficient
+/// that all transactions that get sent to the connector have sufficient
 /// confirmations (suggested value: >6)
 ///
 /// All settlements made with this engine make on-chain Layer 1 Ethereum
@@ -69,32 +70,6 @@ pub struct EthereumLedgerSettlementEngine<S, Si, A> {
     confirmations: u8,
     poll_frequency: Duration,
     connector_url: Url,
-    speculative_nonce_middleware: SpeculativeNonceMiddleware,
-}
-
-#[derive(Clone, Debug)]
-struct SpeculativeNonceMiddleware {
-    web3: Web3<Http>,
-    own_address: Address,
-    latest_confirmed_nonce: u64,
-}
-
-impl SpeculativeNonceMiddleware {
-    fn new(web3: Web3<Http>, own_address: Address) -> Self {
-        Self {
-            web3,
-            own_address,
-            latest_confirmed_nonce: 0,
-        }
-    }
-
-    fn next_nonce(&self) -> impl Future<Item = U256, Error = ()> {
-        // TODO: Implement speculative logic.
-        self.web3
-            .eth()
-            .transaction_count(self.own_address, None)
-            .map_err(|err| error!("Couldn't fetch nonce: {:?}", err))
-    }
 }
 
 pub struct EthereumLedgerSettlementEngineBuilder<'a, S, Si, A> {
@@ -202,8 +177,6 @@ where
             own_address: self.signer.address(),
             token_address: self.token_address,
         };
-        let speculative_nonce_middleware =
-            SpeculativeNonceMiddleware::new(web3.clone(), address.own_address);
 
         let engine = EthereumLedgerSettlementEngine {
             web3,
@@ -214,7 +187,6 @@ where
             confirmations,
             poll_frequency,
             connector_url,
-            speculative_nonce_middleware,
             account_type: PhantomData,
         };
         if self.watch_incoming {
@@ -249,7 +221,7 @@ where
                             "[{:?}] Getting settlement data from the blockchain; instant={:?}",
                             address, instant
                         );
-                        tokio::spawn(_self.notify());
+                        tokio::spawn(_self.handle_received_transactions());
                         Ok(())
                     })
                     .map_err(|e| panic!("interval errored; err={:?}", e)),
@@ -259,160 +231,269 @@ where
 
     /// Routine for notifying the connector about incoming transactions.
     /// Algorithm (heavily unoptimized):
-    /// 1. Fetch the last observed block number and account balance from the store
+    /// 1. Fetch the last observed block number
     /// 2. Fetch the current block number from Ethereum
-    /// 3. Check the current balance of the account
-    /// 4. If the balance is not larger than the last observed balance, terminate.
-    /// 5. Fetch all blocks since the last observed one,
+    /// 3. Fetch all blocks since the last observed one,
     ///    until $(current block number - confirmations), where $confirmations
     ///    is a security parameter to be safe against block reorgs.
-    /// 6. For each block (in parallel):
+    /// 4. For each block (in parallel):
     ///     For each transaction (in parallel):
     ///     1. Skip if it is not sent to our address or have 0 value.
     ///     2. Fetch the id that matches its sender from the store
     ///     3. Notify the connector about it by making a POST request to the connector's
     ///        /accounts/$id/settlement endpoint with transaction's value as the
     ///        body. This call is retried if it fails.
-    /// 7. Save the (current block number - confirmations) and current account
-    ///    balance to the store, to be used as last observed data for the next
-    ///    call of this function.
-    pub fn notify(&self) -> impl Future<Item = (), Error = ()> + Send {
+    /// 5. Save (current block number - confirmations) to be used as
+    ///    last observed data for the next call of this function.
+    // Optimization: This will make 1 settlement API request to
+    // the connector per transaction that comes to us. Since
+    // we're scanning across multiple blocks, we want to
+    // optimize it so that: it gathers a mapping of
+    // (accountId=>amount) across all transactions and blocks, and
+    // only makes 1 transaction per accountId with the
+    // appropriate amount.
+    pub fn handle_received_transactions(&self) -> impl Future<Item = (), Error = ()> + Send {
         let confirmations = self.confirmations;
-        let our_address = self.address.own_address;
-        let connector_url = self.connector_url.clone();
         let web3 = self.web3.clone();
         let store = self.store.clone();
         let store_clone = self.store.clone();
+        let self_clone = self.clone();
+        let self_clone2 = self.clone();
+        let our_address = self.address.own_address;
+        let token_address = self.address.token_address;
 
-        // TODO: Remove the spawn calls from all of the following futures, and
-        // make a join_all over all the transactions per block, and then a
-        // join_all over all the blocks. The last_observed_data must only be
-        // saved if all join_all's are successful. If not, the next call to the
-        // `notifier` function will iterate over the same blocks again and try
-        // to settle any transactions which failed (the `check_tx_credited`
-        // function ensures that no transaction will be double credited)
-        store.load_recently_observed_data()
-        .and_then(move |(last_observed_block, last_observed_balance)| {
-            web3
-                .eth()
-                .block_number()
-                .map_err(|err| println!("Got error {:?}", err))
-                .and_then(move |current_block| {
-                    debug!("Current block {}", current_block);
-                    let fetch_until = current_block - confirmations;
-                    ok(fetch_until)
-                })
-                .and_then(move |fetch_until| {
-                    debug!("Will fetch txs from block {} until {}", last_observed_block, fetch_until);
-                    web3
-                        .eth()
-                        .balance(our_address, None)
-                        .map_err(|err| error!("Got error while getting balance {:?}", err))
-                        .and_then({let web3 = web3.clone(); move |new_balance| {
-                            // TODO: Reduce nested callbacks
-                            if new_balance > last_observed_balance {
-                                // iterate over all blocks 
-                                for block_num in last_observed_block.low_u64()..=fetch_until.low_u64() {
-                                    let web3 = web3.clone();
-                                    trace!("Getting block {}", block_num);
-                                    let block_url = connector_url.clone();
-                                    let get_blocks_future = web3.eth().block(BlockNumber::Number(block_num as u64).into())
-                                    .map_err(move |err| error!("Got error while getting block {}: {:?}", block_num, err))
-                                    .and_then({let store_clone = store_clone.clone(); move |block| {
-                                        trace!("Fetched block: {:?}", block_num);
-                                        if let Some(block) = block {
-                                            // iterate over all tx_hashes in the block
-                                            // and spawn a future that will execute
-                                            // the settlement request if the
-                                            // transaction is sent to us and has
-                                            // >0 value
-                                            for tx_hash in block.transactions {
-                                                trace!("Got transactions {:?}", tx_hash);
-                                                let store_clone = store_clone.clone();
-                                                let mut url = block_url.clone();
-                                                let web3_clone = web3.clone();
-                                                let settle_tx_future = store_clone.check_tx_credited(tx_hash)
-                                                .map_err(move |_| error!("Transaction {} has already been credited!", tx_hash))
-                                                .and_then(move |credited| {
-                                                    if credited {
-                                                        Either::A(ok(()))
-                                                    } else {
-                                                        Either::B(
-                                                        web3_clone.eth().transaction(TransactionId::Hash(tx_hash))
-                                                        .map_err(move |err| error!("Could not fetch transaction data from transaction hash: {:?}. Got error: {:?}", tx_hash, err))
-                                                        .and_then(move |tx| {
-                                                            // Optimization: This will make 1 settlement API request to
-                                                            // the connector per transaction that comes to us. Since
-                                                            // we're scanning across multiple blocks, we want to
-                                                            // optimize it so that: it gathers a mapping of
-                                                            // (accountId=>amount) across all transactions and blocks, and
-                                                            // only makes 1 transaction per accountId with the
-                                                            // appropriate amount.
-                                                            let tx = tx.clone();
-                                                            if let Some(tx) = tx {
-                                                                trace!("Inspecting transaction: {:?}", tx);
-                                                                let (from, amount, token_address) = sent_to_us(tx, our_address);
-                                                                if amount > U256::from(0) {
-                                                                    let addr = Addresses {
-                                                                        own_address: from,
-                                                                        token_address,
-                                                                    };
-                                                                    let notify_connector_future = store_clone.load_account_id_from_address(addr).and_then(move |id| {
-                                                                        url.path_segments_mut()
-                                                                            .expect("Invalid connector URL")
-                                                                            .push("accounts")
-                                                                            .push(&id.to_string())
-                                                                            .push("settlement");
-                                                                        let client = Client::new();
-                                                                        let idempotency_uuid = uuid::Uuid::new_v4().to_hyphenated().to_string();
-                                                                        // retry on fail - https://github.com/ihrwein/backoff
-                                                                        debug!("Making POST to {:?} {:?} {:?}", url, amount.to_string(), idempotency_uuid);
-                                                                        let action = move || {
-                                                                            client.post(url.clone())
-                                                                            .header("Idempotency-Key", idempotency_uuid.clone())
-                                                                            .json(&json!({"amount" : amount.low_u64()}))
-                                                                            .send()
-                                                                            .map_err(move |err| println!("Error notifying accounting system about transaction {:?}: {:?}", tx_hash, err))
-                                                                            .and_then(move |response| {
-                                                                                trace!("Accounting system responded with {:?}", response);
-                                                                                if response.status().is_success() {
-                                                                                    Ok(())
-                                                                                } else {
-                                                                                    Err(())
-                                                                                }
-                                                                            })
-                                                                        };
-                                                                        tokio::spawn(Retry::spawn(ExponentialBackoff::from_millis(10).take(MAX_RETRIES), action).map_err(|_| error!("Exceeded max retries when notifying connector. Please check your API.")));
-                                                                        ok(())
-                                                                    });
-                                                                    tokio::spawn(notify_connector_future);
-                                                                }
-                                                            }
+        // get the current block number
+        web3.eth()
+            .block_number()
+            .map_err(move |err| error!("Could not fetch current block number {:?}", err))
+            .and_then(move |current_block| {
+                debug!("Current block {}", current_block);
+                // get the safe number of blocks to avoid reorgs
+                let fetch_until = current_block - confirmations;
+                // U256 does not implement IntoFuture so we must wrap it
+                Ok((Ok(fetch_until), store.load_recently_observed_block()))
+            })
+            .flatten()
+            .and_then(move |(fetch_until, last_observed_block)| {
+                debug!(
+                    "Will fetch txs from block {} until {}",
+                    last_observed_block, fetch_until
+                );
 
-                                                            ok(())
-                                                        }))
-                                                    }
-                                                });
-                                                // spawn a future so that we can
-                                                // process as many as possible in parallel
-                                                tokio::spawn(settle_tx_future);
-                                            }
-                                        } else {
-                                            println!("Block {:?} not found", block_num);
-                                        }
-                                        ok(())
-                                    }});
-                                    tokio::spawn(get_blocks_future);
-                                }
-                            }
-                            // Assume optimistically that the function will succeed
-                            // everywhere and save the current block as the latest
-                            // block. We can implement retry logic for blocks/txs that
-                            // are not fetched, OR process them serially, and on failure
-                            // save the block and quit.
-                            tokio::spawn(store.save_recently_observed_data(fetch_until, new_balance))
-                        }})
+                let notify_all_txs_fut = if let Some(token_address) = token_address {
+                    debug!("Settling for ERC20 transactions");
+                    // get all erc20 transactions
+                    let notify_all_erc20_txs_fut = transfer_logs(
+                        web3.clone(),
+                        token_address,
+                        None,
+                        Some(our_address),
+                        BlockNumber::Number(last_observed_block.low_u64()),
+                        BlockNumber::Number(fetch_until.low_u64()),
+                    )
+                    .and_then(move |transfers: Vec<ERC20Transfer>| {
+                        // map each incoming erc20 transactions to an outgoing
+                        // notification to the connector
+                        join_all(transfers.into_iter().map(move |transfer| {
+                            self_clone2.notify_erc20_transfer(transfer, token_address)
+                        }))
+                    });
+
+                    // combine all erc20 futures for that range of blocks
+                    Either::A(notify_all_erc20_txs_fut)
+                } else {
+                    debug!("Settling for ETH transactions");
+                    let checked_blocks = last_observed_block.low_u64()..=fetch_until.low_u64();
+                    // for each block create a future which will notify the
+                    // connector about all the transactions in that block that are sent to our account
+                    let notify_eth_txs_fut = checked_blocks
+                        .map(move |block_num| self_clone.notify_eth_txs_in_block(block_num));
+
+                    // combine all the futures for that range of blocks
+                    Either::B(join_all(notify_eth_txs_fut))
+                };
+
+                notify_all_txs_fut.and_then(move |ret| {
+                    debug!("Transactions settled {:?}", ret);
+                    // now that all transactions have been processed successfully, we
+                    // can save `fetch_until` as the latest observed block
+                    store_clone.save_recently_observed_block(fetch_until)
                 })
+            })
+    }
+
+    /// Submits an ERC20 transfer object's data to the connector
+    // todo: Try combining the body of this function with `notify_eth_transfer`
+    fn notify_erc20_transfer(
+        &self,
+        transfer: ERC20Transfer,
+        token_address: Address,
+    ) -> impl Future<Item = (), Error = ()> {
+        let store = self.store.clone();
+        let tx_hash = transfer.tx_hash;
+        let self_clone = self.clone();
+        let addr = Addresses {
+            own_address: transfer.from,
+            token_address: Some(token_address),
+        };
+        let amount = transfer.amount;
+        store
+            .check_if_tx_processed(tx_hash)
+            .map_err(move |_| error!("Error when querying store about transaction: {:?}", tx_hash))
+            .and_then(move |processed| {
+                if !processed {
+                    Either::A(
+                        store
+                            .load_account_id_from_address(addr)
+                            .and_then(move |id| {
+                                self_clone.notify_connector(
+                                    id.to_string(),
+                                    amount.low_u64(),
+                                    tx_hash,
+                                )
+                            })
+                            .and_then(move |_| {
+                                // only save the transaction hash if the connector
+                                // was successfully notified
+                                store.mark_tx_processed(tx_hash)
+                            }),
+                    )
+                } else {
+                    Either::B(ok(())) // return an empty future otherwise since we want to skip this transaction
+                }
+            })
+    }
+
+    fn notify_eth_txs_in_block(&self, block_number: u64) -> impl Future<Item = (), Error = ()> {
+        debug!("Getting txs for block {}", block_number);
+        let self_clone = self.clone();
+        // Get the block at `block_number`
+        self.web3
+            .eth()
+            .block(BlockNumber::Number(block_number as u64).into())
+            .map_err(move |err| error!("Got error while getting block {}: {:?}", block_number, err))
+            .and_then(move |maybe_block| {
+                // Error out if the block was not found (unlikely to occur since we're only
+                // calling this for past blocks)
+                if let Some(block) = maybe_block {
+                    ok(block)
+                } else {
+                    err(())
+                }
+            })
+            .and_then(move |block| {
+                // for each transaction inside the block, submit it to the
+                // connector if it was sent to us
+                let submit_txs_to_connector_future = block
+                    .transactions
+                    .into_iter()
+                    .map(move |tx_hash| self_clone.notify_eth_transfer(tx_hash));
+
+                // combine all the futures for that block's transactions
+                join_all(submit_txs_to_connector_future)
+            })
+            .and_then(move |_res| {
+                debug!(
+                    "Successfully logged transactions in block: {:?}",
+                    block_number
+                );
+                ok(())
+            })
+    }
+
+    fn notify_eth_transfer(&self, tx_hash: H256) -> impl Future<Item = (), Error = ()> {
+        let our_address = self.address.own_address;
+        let web3 = self.web3.clone();
+        let store = self.store.clone();
+        let self_clone = self.clone();
+        // Skip transactions which have already been processed by the connector
+        store.check_if_tx_processed(tx_hash)
+        .map_err(move |_| error!("Error when querying store about transaction: {:?}", tx_hash))
+        .and_then(move |processed| {
+            if !processed {
+                Either::A(
+                web3.eth().transaction(TransactionId::Hash(tx_hash))
+                .map_err(move |err| error!("Could not fetch transaction data from transaction hash: {:?}. Got error: {:?}", tx_hash, err))
+                .and_then(move |maybe_tx| {
+                    // Unlikely to error out since we only call this on
+                    // transaction hashes which were inside a mined block that
+                    // had many confirmations
+                    if let Some(tx) = maybe_tx { ok(tx) } else { err(())}
+                })
+                .and_then(move |tx| {
+                    trace!("Inspecting transaction: {:?}", tx);
+                    let (from, amount, token_address) = sent_to_us(tx, our_address);
+                    if amount > U256::from(0) {
+                        // if the tx was for us and had some non-0 amount, then let
+                        // the connector know
+                        let addr = Addresses {
+                            own_address: from,
+                            token_address,
+                        };
+                        Either::A(
+                        store.load_account_id_from_address(addr)
+                        .and_then(move |id| {
+                            self_clone.notify_connector(id.to_string(), amount.low_u64(), tx_hash)
+                        })
+                        .and_then(move |_| {
+                            // only save the transaction hash if the connector
+                            // was successfully notified
+                            store.mark_tx_processed(tx_hash)
+                        }))
+                    } else {
+                        // otherwise return an empty future
+                        Either::B(ok(()))
+                    }
+                }))
+            } else {
+                Either::B(ok(())) // return an empty future otherwise since we want to skip this transaction
+            }
+        })
+    }
+
+    fn notify_connector(
+        &self,
+        account_id: String,
+        amount: u64,
+        tx_hash: H256,
+    ) -> impl Future<Item = (), Error = ()> {
+        let mut url = self.connector_url.clone();
+        let account_id_clone = account_id.clone();
+        url.path_segments_mut()
+            .expect("Invalid connector URL")
+            .push("accounts")
+            .push(&account_id.clone())
+            .push("settlement");
+        let client = Client::new();
+        debug!("Making POST to {:?} {:?} about {:?}", url, amount, tx_hash);
+        let action = move || {
+            let account_id = account_id.clone();
+            client
+                .post(url.clone())
+                .header("Idempotency-Key", tx_hash.to_string())
+                .json(&json!({ "amount": amount }))
+                .send()
+                .map_err(move |err| {
+                    error!(
+                        "Error notifying Accounting System's account: {:?}, amount: {:?}: {:?}",
+                        account_id, amount, err
+                    )
+                })
+                .and_then(move |response| {
+                    trace!("Accounting system responded with {:?}", response);
+                    if response.status().is_success() {
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                })
+        };
+        Retry::spawn(
+            ExponentialBackoff::from_millis(10).take(MAX_RETRIES),
+            action,
+        )
+        .map_err(move |_| {
+            error!("Exceeded max retries when notifying connector about account {:?} for amount {:?} and transaction hash {:?}. Please check your API.", account_id_clone, amount, tx_hash)
         })
     }
 
@@ -431,21 +512,34 @@ where
         token_address: Option<Address>,
     ) -> Box<dyn Future<Item = H256, Error = ()> + Send> {
         let web3 = self.web3.clone();
-        let nonce_middleware = self.speculative_nonce_middleware.clone();
         let own_address = self.address.own_address;
         let chain_id = self.chain_id;
         let signer = self.signer.clone();
+
+        let mut tx = make_tx(to, amount, token_address);
+        let gas_amount_fut = web3.eth().estimate_gas(
+            CallRequest {
+                to,
+                from: None,
+                gas: None,
+                gas_price: None,
+                value: Some(tx.value),
+                data: Some(tx.data.clone().into()),
+            },
+            None,
+        );
+        let gas_price_fut = web3.eth().gas_price();
+        let nonce_fut = web3
+            .eth()
+            .transaction_count(own_address, Some(BlockNumber::Pending));
         Box::new(
-            nonce_middleware
-                .next_nonce()
-                .map_err(move |err| {
-                    error!(
-                        "Error when querying account {:?} nonce: {:?}",
-                        own_address, err
-                    )
-                })
-                .and_then(move |nonce| {
-                    let tx = make_tx(to, amount, nonce, token_address); // 2
+            join_all(vec![gas_price_fut, gas_amount_fut, nonce_fut])
+                .map_err(|err| error!("Error when querying gas price / nonce: {:?}", err))
+                .and_then(move |data| {
+                    tx.gas_price = data[0];
+                    tx.gas = data[1];
+                    tx.nonce = data[2];
+
                     let signed_tx = signer.sign_raw_tx(tx.clone(), chain_id); // 3
                     debug!("Sending transaction: {:?}", signed_tx);
                     let action = move || {
@@ -557,7 +651,8 @@ where
                 })
                 .and_then(move |resp| {
                     parse_body_into_payment_details(resp).and_then(move |payment_details| {
-                        let challenge_hash = Sha3::digest(&challenge_clone);
+                        let data = prefixed_mesage(challenge_clone);
+                        let challenge_hash = Sha3::digest(&data);
                         let recovered_address = payment_details.sig.recover(&challenge_hash);
                         debug!("Received payment details {:?}", payment_details);
                         result(recovered_address)
@@ -616,7 +711,8 @@ where
             "Responding with our account's details {} {:?}",
             account_id, address
         );
-        let signature = self.signer.sign_message(&body.clone());
+        let data = prefixed_mesage(body.clone());
+        let signature = self.signer.sign_message(&data);
         let resp = {
             let ret = PaymentDetailsResponse::new(address, signature);
             serde_json::to_string(&ret).unwrap()
@@ -678,6 +774,12 @@ fn parse_body_into_payment_details(
                 (StatusCode::from_u16(500).unwrap(), err)
             })
         })
+}
+
+fn prefixed_mesage(challenge: Vec<u8>) -> Vec<u8> {
+    let mut ret = ETH_CREATE_ACCOUNT_PREFIX.to_vec();
+    ret.extend(challenge);
+    ret
 }
 
 #[cfg(test)]
@@ -810,11 +912,10 @@ mod tests {
     fn test_receive_message() {
         let bob: TestAccount = BOB.clone();
 
-        let challenge = Uuid::new_v4().to_hyphenated().to_string();
-        let signature = ALICE_PK
-            .clone()
-            .sign_message(&challenge.clone().into_bytes());
-        let receive_message = challenge.into_bytes();
+        let challenge = Uuid::new_v4().to_hyphenated().to_string().into_bytes();
+        let signed_challenge = prefixed_mesage(challenge.clone());
+
+        let signature = ALICE_PK.clone().sign_message(&signed_challenge);
 
         let store = test_store(ALICE.clone(), false, false, false);
         let engine = test_engine(
@@ -826,7 +927,7 @@ mod tests {
         );
 
         // Alice's engine receives a challenge by Bob.
-        let ret = block_on(engine.receive_message(bob.id.to_string(), receive_message)).unwrap();
+        let ret = block_on(engine.receive_message(bob.id.to_string(), challenge)).unwrap();
         assert_eq!(ret.0.as_u16(), 200);
 
         let alice_addrs = Addresses {

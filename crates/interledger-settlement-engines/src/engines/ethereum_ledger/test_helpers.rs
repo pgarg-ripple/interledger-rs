@@ -59,7 +59,6 @@ pub struct TestStore {
     #[allow(clippy::all)]
     pub cache: Arc<RwLock<HashMap<String, (StatusCode, String, [u8; 32])>>>,
     pub last_observed_block: Arc<RwLock<U256>>,
-    pub last_observed_balance: Arc<RwLock<U256>>,
     pub saved_hashes: Arc<RwLock<HashMap<H256, bool>>>,
     pub cache_hits: Arc<RwLock<u64>>,
 }
@@ -100,25 +99,17 @@ impl EthereumStore for TestStore {
         Box::new(ok(v))
     }
 
-    fn save_recently_observed_data(
+    fn save_recently_observed_block(
         &self,
         block: U256,
-        balance: U256,
     ) -> Box<dyn Future<Item = (), Error = ()> + Send> {
         let mut guard = self.last_observed_block.write();
         *guard = block;
-        let mut guard = self.last_observed_balance.write();
-        *guard = balance;
         Box::new(ok(()))
     }
 
-    fn load_recently_observed_data(
-        &self,
-    ) -> Box<dyn Future<Item = (U256, U256), Error = ()> + Send> {
-        Box::new(ok((
-            *self.last_observed_block.read(),
-            *self.last_observed_balance.read(),
-        )))
+    fn load_recently_observed_block(&self) -> Box<dyn Future<Item = U256, Error = ()> + Send> {
+        Box::new(ok(*self.last_observed_block.read()))
     }
 
     fn load_account_id_from_address(
@@ -135,15 +126,23 @@ impl EthereumStore for TestStore {
         Box::new(ok(d))
     }
 
-    fn check_tx_credited(&self, tx_hash: H256) -> Box<dyn Future<Item = bool, Error = ()> + Send> {
-        let mut hashes = self.saved_hashes.write();
-        // if hash exists error, else store it
+    fn check_if_tx_processed(
+        &self,
+        tx_hash: H256,
+    ) -> Box<dyn Future<Item = bool, Error = ()> + Send> {
+        let hashes = self.saved_hashes.read();
+        // if hash exists then return error
         if hashes.get(&tx_hash).is_some() {
             Box::new(ok(true))
         } else {
-            (*hashes).insert(tx_hash, true);
             Box::new(ok(false))
         }
+    }
+
+    fn mark_tx_processed(&self, tx_hash: H256) -> Box<dyn Future<Item = (), Error = ()> + Send> {
+        let mut hashes = self.saved_hashes.write();
+        (*hashes).insert(tx_hash, true);
+        Box::new(ok(()))
     }
 }
 
@@ -235,7 +234,6 @@ impl TestStore {
             address_to_id: Arc::new(RwLock::new(address_to_id)),
             cache: Arc::new(RwLock::new(HashMap::new())),
             cache_hits: Arc::new(RwLock::new(0)),
-            last_observed_balance: Arc::new(RwLock::new(U256::from(0))),
             last_observed_block: Arc::new(RwLock::new(U256::from(0))),
             saved_hashes: Arc::new(RwLock::new(HashMap::new())),
         }
