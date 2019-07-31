@@ -4,6 +4,7 @@ Here you can find various demos of Interledger.rs' functionality:
 
 1. [Simple Two-Node Payment](./simple/README.md)
 1. [Two-Node Payment with On-Ledger Ethereum Settlement](./e2e_tests/ethereum_ledger/README.md)
+1. [Two-Node Payment with On-Ledger XRP Settlement](./e2e_tests/xrp_ledger/README.md)
 1. Three-Node Payment (Coming Soon!)
 1. Cross-Currency Payment and Settlement (Coming Soon!)
 1. Integrating Interledger Into Your App (Coming Soon!)
