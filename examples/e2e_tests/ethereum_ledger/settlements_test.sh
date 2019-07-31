@@ -8,9 +8,9 @@ sleep 3 # wait for ganache to start
 ILP_DIR=$ILP_ROOT
 ILP=$ILP_DIR/target/debug/interledger
 ILP_ENGINE=$ILP_DIR/target/debug/interledger-settlement-engines
-E2E_TEST_DIR=$ILP_DIR/examples/e2e_tests/ethereum_ledger
+E2E_TEST_DIR=$ILP_DIR/examples/e2e_tests/
 
-LOGS=$E2E_TEST_DIR/settlement_test_logs
+LOGS=$E2E_TEST_DIR/ethereum_ledger/settlement_test_logs
 rm -rf $LOGS && mkdir -p $LOGS
 
 bash $E2E_TEST_DIR/init.sh
