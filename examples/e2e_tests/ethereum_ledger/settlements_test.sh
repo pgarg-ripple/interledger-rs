@@ -5,21 +5,15 @@ ganache-cli -m "abstract vacuum mammal awkward pudding scene penalty purchase di
 
 sleep 3 # wait for ganache to start
 
-ROOT=$HOME/projects/xpring-contract
-ILP_DIR=$ROOT/interledger-rs
+ILP_DIR=$ILP_ROOT
 ILP=$ILP_DIR/target/debug/interledger
 ILP_ENGINE=$ILP_DIR/target/debug/interledger-settlement-engines
-CONFIGS=$ILP_DIR/examples
+E2E_TEST_DIR=$ILP_DIR/examples/e2e_tests/ethereum_ledger
 
-
-LOGS=`pwd`/settlement_test_logs
+LOGS=$E2E_TEST_DIR/settlement_test_logs
 rm -rf $LOGS && mkdir -p $LOGS
 
-echo "Initializing redis"
-bash $ILP_DIR/examples/init.sh &
-redis-cli -p 6379 flushall
-redis-cli -p 6380 flushall
-
+bash $E2E_TEST_DIR/init.sh
 sleep 1
 
 ALICE_ADDRESS="3cdb3d9e1b74692bb1e3bb5fc81938151ca64b02"
@@ -55,9 +49,9 @@ RUST_LOG=interledger=debug $ILP_ENGINE ethereum-ledger \
 sleep 1
 
 echo "Initializing Alice Connector"
-RUST_LOG="interledger=debug,interledger=trace" $ILP node --config $CONFIGS/alice.yaml &> $LOGS/ilp_alice.log &
+RUST_LOG="interledger=debug,interledger=trace" $ILP node --config $E2E_TEST_DIR/alice.yaml &> $LOGS/ilp_alice.log &
 echo "Initializing Bob Connector"
-RUST_LOG="interledger=debug,interledger=trace" $ILP node --config $CONFIGS/bob.yaml &> $LOGS/ilp_bob.log &
+RUST_LOG="interledger=debug,interledger=trace" $ILP node --config $E2E_TEST_DIR/bob.yaml &> $LOGS/ilp_bob.log &
 
 sleep 2
 read -p "Press [Enter] key to continue..."
