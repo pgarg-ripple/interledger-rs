@@ -187,7 +187,7 @@ impl AccountStore for TestStore {
     fn get_accounts(
         &self,
         account_ids: Vec<<<Self as AccountStore>::Account as Account>::AccountId>,
-    ) -> Box<Future<Item = Vec<Self::Account>, Error = ()> + Send> {
+    ) -> Box<dyn Future<Item = Vec<Self::Account>, Error = ()> + Send> {
         let accounts: Vec<TestAccount> = self
             .accounts
             .iter()
