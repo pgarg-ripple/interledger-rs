@@ -22,8 +22,8 @@ jobs:
             sudo apt-get update
             cargo install --quiet cargo-audit || true # cargo-kcov
             rustup component add rustfmt clippy || true
-            sudo apt-get install libcurl3 -y
             sudo apt-get install curl -y
+            sudo apt-get install libcurl3 -y
       - run:
           name: Install Redis
           command: |
