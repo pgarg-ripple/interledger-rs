@@ -26,6 +26,10 @@
 //!
 //! HttpServerService --> ValidatorService --> StreamReceiverService
 
+#[cfg(test)]
+#[macro_use]
+extern crate tower_web;
+
 use futures::{Future, IntoFuture};
 use interledger_packet::{Fulfill, Prepare, Reject};
 use std::{

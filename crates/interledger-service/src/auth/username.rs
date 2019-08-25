@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use tower_web::{Extract, Response};
 use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
@@ -19,7 +20,7 @@ lazy_static! {
 /// 1. [NFKC Normalization](https://en.wikipedia.org/wiki/Unicode_equivalence#Normalization)
 /// 2. Checks the string is 2-32 word characters only (no special characters except `_`)
 /// 3. Uses [case folding](https://www.w3.org/International/wiki/Case_folding) to convert to lowercase in a language-aware manner
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Extract, Response)]
 pub struct Username(String);
 
 impl Display for Username {
@@ -59,6 +60,38 @@ impl FromStr for Username {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::future::{ok, Future};
+    use reqwest::r#async::Client;
+    use tokio::runtime::Builder as RuntimeBuilder;
+    use tower_web::ServiceBuilder;
+
+    #[test]
+    fn username_in_web_services() {
+        impl_web! {
+            struct MockService;
+
+            impl MockService {
+                #[get("/:username")]
+                fn hello(&self, username: Username) -> Result<Username, ()> {
+                    Ok(username)
+                }
+            }
+        }
+
+        let mut runtime = RuntimeBuilder::new()
+            .panic_handler(|_| panic!("Tokio worker panicked"))
+            .build()
+            .unwrap();
+        let addr = "127.0.0.1:8080".parse().expect("Invalid address");
+        runtime.spawn(ok(ServiceBuilder::new()
+            .resource(MockService)
+            .run(&addr)
+            .unwrap()));
+
+        // let client = Client::new();
+        // let resp = client.get("127.0.0.1:8080").send().wait().unwrap();
+        // println!("GOT RESP {:?}", resp);
+    }
 
     #[test]
     fn case_folding_works() {
