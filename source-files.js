@@ -4,4 +4,5 @@ sourcesIndex["interledger_ildcp"] = {"name":"","files":["client.rs","lib.rs","pa
 sourcesIndex["interledger_packet"] = {"name":"","files":["address.rs","error.rs","errors.rs","lib.rs","oer.rs","packet.rs"]};
 sourcesIndex["interledger_router"] = {"name":"","files":["lib.rs","router.rs"]};
 sourcesIndex["interledger_service"] = {"name":"","dirs":[{"name":"auth","files":["mod.rs","token.rs","username.rs"]}],"files":["lib.rs"]};
+sourcesIndex["interledger_settlement"] = {"name":"","files":["api.rs","client.rs","lib.rs","message_service.rs"]};
 createSourceSidebar();
