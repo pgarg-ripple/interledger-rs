@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["Error",""]],"fn":[["pay","Query the details of the given Payment Pointer and send a payment using the STREAM protocol."],["query",""]],"struct":[["SpspResponder","A Hyper::Service that responds to incoming SPSP Query requests with newly generated details for a STREAM connection."],["SpspResponse",""]]});

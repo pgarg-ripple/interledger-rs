@@ -6,5 +6,6 @@ sourcesIndex["interledger_router"] = {"name":"","files":["lib.rs","router.rs"]};
 sourcesIndex["interledger_service"] = {"name":"","dirs":[{"name":"auth","files":["mod.rs","token.rs","username.rs"]}],"files":["lib.rs"]};
 sourcesIndex["interledger_service_util"] = {"name":"","files":["balance_service.rs","echo_service.rs","exchange_rates_service.rs","expiry_shortener_service.rs","lib.rs","max_packet_amount_service.rs","rate_limit_service.rs","validator_service.rs"]};
 sourcesIndex["interledger_settlement"] = {"name":"","files":["api.rs","client.rs","lib.rs","message_service.rs"]};
+sourcesIndex["interledger_spsp"] = {"name":"","files":["client.rs","lib.rs","server.rs"]};
 sourcesIndex["interledger_stream"] = {"name":"","files":["client.rs","congestion.rs","crypto.rs","error.rs","lib.rs","packet.rs","server.rs"]};
 createSourceSidebar();
