@@ -11,4 +11,5 @@ ALIASES["interledger_service_util"] = {};
 ALIASES["interledger_settlement"] = {};
 ALIASES["interledger_spsp"] = {};
 ALIASES["interledger_store_memory"] = {};
+ALIASES["interledger_store_redis"] = {};
 ALIASES["interledger_stream"] = {};

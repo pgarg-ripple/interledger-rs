@@ -11,5 +11,6 @@ sourcesIndex["interledger_service_util"] = {"name":"","files":["balance_service.
 sourcesIndex["interledger_settlement"] = {"name":"","files":["api.rs","client.rs","lib.rs","message_service.rs"]};
 sourcesIndex["interledger_spsp"] = {"name":"","files":["client.rs","lib.rs","server.rs"]};
 sourcesIndex["interledger_store_memory"] = {"name":"","files":["account.rs","lib.rs","store.rs"]};
+sourcesIndex["interledger_store_redis"] = {"name":"","files":["account.rs","crypto.rs","lib.rs","store.rs"]};
 sourcesIndex["interledger_stream"] = {"name":"","files":["client.rs","congestion.rs","crypto.rs","error.rs","lib.rs","packet.rs","server.rs"]};
 createSourceSidebar();
