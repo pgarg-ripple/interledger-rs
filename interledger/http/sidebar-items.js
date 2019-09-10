@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["HttpClientService",""],["HttpServerService","A Hyper::Service that parses incoming ILP-Over-HTTP requests, validates the authorization, and passes the request to an IncomingService handler."]],"trait":[["HttpAccount",""],["HttpStore","The interface for Stores that can be used with the HttpServerService."]]});

@@ -1,4 +1,5 @@
 var N = null;var sourcesIndex = {};
+sourcesIndex["interledger"] = {"name":"","files":["cli.rs","lib.rs","node.rs"]};
 sourcesIndex["interledger_api"] = {"name":"","dirs":[{"name":"routes","files":["accounts.rs","ilp.rs","mod.rs","settings.rs","spsp.rs"]}],"files":["client.rs","lib.rs"]};
 sourcesIndex["interledger_btp"] = {"name":"","files":["client.rs","errors.rs","lib.rs","oer.rs","packet.rs","server.rs","service.rs"]};
 sourcesIndex["interledger_ccp"] = {"name":"","files":["lib.rs","packet.rs","routing_table.rs","server.rs"]};

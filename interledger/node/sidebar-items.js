@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["generate_redis_secret",""]],"struct":[["InterledgerNode","An all-in-one Interledger node that includes sender and receiver functionality, a connector, and a management API. The node uses Redis for persistence."]]});

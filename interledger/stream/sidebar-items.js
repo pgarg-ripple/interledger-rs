@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["Error",""]],"fn":[["send_money","Send a given amount of money using the STREAM transport protocol."]],"struct":[["ConnectionGenerator","A STREAM connection generator that creates `destination_account` and `shared_secret` values based on a single root secret."],["StreamReceiverService","An OutgoingService that fulfills incoming STREAM packets."]]});

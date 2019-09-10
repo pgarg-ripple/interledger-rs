@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["get_ildcp_info","Get the ILP address and asset details for a given account."],["is_ildcp_request",""]],"struct":[["IldcpRequest",""],["IldcpResponse",""],["IldcpResponseBuilder",""],["IldcpService","A simple service that intercepts incoming ILDCP requests and responds using the information in the Account struct."]],"trait":[["IldcpAccount",""]]});

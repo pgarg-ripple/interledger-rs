@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["extract_var_octet_string",""],["predict_var_octet_string","Returns the size (in bytes) of the buffer that encodes a VarOctetString of `length` bytes."]],"trait":[["BufOerExt",""],["MutBufOerExt",""]]});
