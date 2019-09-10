@@ -1,4 +1,5 @@
 var ALIASES = {};
+ALIASES["interledger_api"] = {};
 ALIASES["interledger_http"] = {};
 ALIASES["interledger_ildcp"] = {};
 ALIASES["interledger_packet"] = {};
