@@ -1,3 +1,46 @@
+<!--!
+# For integration tests
+function pre_test_hook() {
+    if [ $TEST_MODE -eq 1 ] && [ "${CIRCLECI}" = "true" ] && [ ${USE_DOCKER} -eq 1 ]; then
+        # Make tunnels to DOCKER_HOST containers if run on CircleCI.
+        # This is because the docker is not running on the CI container and
+        # we have to connect the following two:
+        #   - 127.0.0.1:xxxx (on CI container)
+        #   - 127.0.0.1:xxxx (on DOCKER_HOST's container:xxxx)
+        # so that we could `curl localhost:xxxx` to connect to DOCKER_HOST's containers.
+        printf "Setting tunnels..."
+        # node
+        ncat -l -k -c "docker exec -i interledger-rs-node_a nc 127.0.0.1 7770" -p 7770 &
+        ncat -l -k -c "docker exec -i interledger-rs-node_b nc 127.0.0.1 7770" -p 8770 &
+        # se
+        ncat -l -k -c "docker exec -i interledger-rs-se_a nc 127.0.0.1 3000" -p 3000 &
+        ncat -l -k -c "docker exec -i interledger-rs-se_b nc 127.0.0.1 3000" -p 3001 &
+        printf "done\n"
+     fi
+}
+
+function post_test_hook() {
+    if [ $TEST_MODE -eq 1 ]; then
+        test_equals_or_exit '{"balance":"-500"}' test_http_response_body -H "Authorization: Bearer alice:in_alice" http://localhost:7770/accounts/alice/balance
+        test_equals_or_exit '{"balance":"0"}' test_http_response_body -H "Authorization: Bearer bob:bob_password" http://localhost:7770/accounts/bob/balance
+        test_equals_or_exit '{"balance":"0"}' test_http_response_body -H "Authorization: Bearer alice:alice_password" http://localhost:8770/accounts/alice/balance
+        test_equals_or_exit '{"balance":"500"}' test_http_response_body -H "Authorization: Bearer bob:in_bob" http://localhost:8770/accounts/bob/balance
+        
+        if [ ${USE_DOCKER} -eq 1 ]; then
+            docker logs interledger-rs-node_a &> logs/interledger-rs-node_a.log
+            docker logs interledger-rs-node_b &> logs/interledger-rs-node_b.log
+            docker logs interledger-rs-se_a &> logs/interledger-rs-se_a.log
+            docker logs interledger-rs-se_b &> logs/interledger-rs-se_b.log
+            docker logs ganache &> logs/ganache.log
+            docker logs redis-alice_node &> logs/redis-alice_node.log
+            docker logs redis-alice_se &> logs/redis-alice_se.log
+            docker logs redis-bob_node &> logs/redis-bob_node.log
+            docker logs redis-bob_se &> logs/redis-bob_se.log
+        fi
+    fi
+}
+-->
+
 # Interledger with Ethereum On-Ledger Settlement
 > A demo that sends payments between 2 Interledger.rs nodes and settles using Ethereum transactions.
 
@@ -99,6 +142,8 @@ else
         fi
     done
 fi
+
+run_pre_test_hook
 -->
 
 ### 1. Build interledger.rs
@@ -115,7 +160,7 @@ else
     printf "Building interledger.rs... (This may take a couple of minutes)\n"
 -->
 ```bash
-cargo build --bin interledger --bin interledger-settlement-engines
+cargo build --all-features --bin interledger --bin interledger-settlement-engines
 ```
 <!--!
 fi
@@ -124,8 +169,9 @@ fi
 ### 2. Launch Redis
 
 <!--!
-printf "\nStarting Redis...\n"
+printf "\nStarting Redis"
 if [ "$USE_DOCKER" -eq 1 ]; then
+    printf "\n"
     $CMD_DOCKER run --name redis-alice_node -d -p 127.0.0.1:6379:6379 --network=interledger redis:5.0.5
     $CMD_DOCKER run --name redis-alice_se -d -p 127.0.0.1:6380:6379 --network=interledger redis:5.0.5
     $CMD_DOCKER run --name redis-bob_node -d -p 127.0.0.1:6381:6379 --network=interledger redis:5.0.5
@@ -144,12 +190,17 @@ redis-server --port 6380 &> logs/redis-a-se.log &
 redis-server --port 6381 &> logs/redis-b-node.log &
 redis-server --port 6382 &> logs/redis-b-se.log &
 ```
-<!--!
-sleep 1
--->
 
 To remove all the data in Redis, you might additionally perform:
 
+<!--!
+fi
+
+sleep 2
+printf "done\n"
+
+if [ "$USE_DOCKER" -eq 0 ]; then
+-->
 ```bash
 for port in `seq 6379 6382`; do
     redis-cli -p $port flushall
@@ -201,7 +252,7 @@ if [ "$USE_DOCKER" -eq 1 ]; then
         --network=interledger \
         --name=interledger-rs-se_a \
         -td \
-        interledgerrs/settlement-engine ethereum-ledger \
+        interledgerrs/settlement-engines ethereum-ledger \
         --private_key 380eb0f3d505f087e438eca80bc4df9a7faa24f868e69fc0440261a0fc0567dc \
         --confirmations 0 \
         --poll_frequency 1000 \
@@ -216,7 +267,7 @@ if [ "$USE_DOCKER" -eq 1 ]; then
         --network=interledger \
         --name=interledger-rs-se_b \
         -td \
-        interledgerrs/settlement-engine ethereum-ledger \
+        interledgerrs/settlement-engines ethereum-ledger \
         --private_key cc96601bc52293b53c4736a12af9130abf347669b3813f9ec4cafdf6991b087e \
         --confirmations 0 \
         --poll_frequency 1000 \
@@ -232,7 +283,7 @@ else
 export RUST_LOG=interledger=debug
 
 # Start Alice's settlement engine
-cargo run --bin interledger-settlement-engines -- ethereum-ledger \
+cargo run --all-features --bin interledger-settlement-engines -- ethereum-ledger \
 --private_key 380eb0f3d505f087e438eca80bc4df9a7faa24f868e69fc0440261a0fc0567dc \
 --confirmations 0 \
 --poll_frequency 1000 \
@@ -243,7 +294,7 @@ cargo run --bin interledger-settlement-engines -- ethereum-ledger \
 &> logs/node-alice-settlement-engine.log &
 
 # Start Bob's settlement engine
-cargo run --bin interledger-settlement-engines -- ethereum-ledger \
+cargo run --all-features --bin interledger-settlement-engines -- ethereum-ledger \
 --private_key cc96601bc52293b53c4736a12af9130abf347669b3813f9ec4cafdf6991b087e \
 --confirmations 0 \
 --poll_frequency 1000 \
@@ -308,7 +359,7 @@ ILP_REDIS_URL=redis://127.0.0.1:6379/ \
 ILP_HTTP_BIND_ADDRESS=127.0.0.1:7770 \
 ILP_BTP_BIND_ADDRESS=127.0.0.1:7768 \
 ILP_SETTLEMENT_API_BIND_ADDRESS=127.0.0.1:7771 \
-cargo run --bin interledger -- node &> logs/node-alice.log &
+cargo run --all-features --bin interledger -- node &> logs/node-alice.log &
 
 # Start Bob's node
 ILP_ADDRESS=example.bob \
@@ -318,7 +369,7 @@ ILP_REDIS_URL=redis://127.0.0.1:6381/ \
 ILP_HTTP_BIND_ADDRESS=127.0.0.1:8770 \
 ILP_BTP_BIND_ADDRESS=127.0.0.1:8768 \
 ILP_SETTLEMENT_API_BIND_ADDRESS=127.0.0.1:8771 \
-cargo run --bin interledger -- node &> logs/node-bob.log &
+cargo run --all-features --bin interledger -- node &> logs/node-bob.log &
 ```
 
 <!--!
@@ -678,7 +729,7 @@ If you inspect `ganache-cli`'s output, you will notice that the block number has
 
 <!--!
 printf "\n"
-run_hook_before_kill
+run_post_test_hook
 if [ $TEST_MODE -ne 1 ]; then
     prompt_yn "Do you want to kill the services? [Y/n]" "y"
 fi
@@ -760,15 +811,3 @@ You might have run another example. Stop them first and try again. How to stop t
 This example showed an SPSP payment sent between two Interledger.rs nodes that settled using on-ledger Ethereum transactions.
 
 Check out the [other examples](../README.md) for more complex demos that show other features of Interledger, including multi-hop routing and cross-currency payments.
-
-<!--!
-# For integration tests
-function hook_before_kill() {
-    if [ $TEST_MODE -eq 1 ]; then
-        test_equals_or_exit '{"balance":"-500"}' test_http_response_body -H "Authorization: Bearer alice:in_alice" http://localhost:7770/accounts/alice/balance
-        test_equals_or_exit '{"balance":"0"}' test_http_response_body -H "Authorization: Bearer bob:bob_password" http://localhost:7770/accounts/bob/balance
-        test_equals_or_exit '{"balance":"0"}' test_http_response_body -H "Authorization: Bearer alice:alice_password" http://localhost:8770/accounts/alice/balance
-        test_equals_or_exit '{"balance":"500"}' test_http_response_body -H "Authorization: Bearer bob:in_bob" http://localhost:8770/accounts/bob/balance
-    fi
-}
--->
