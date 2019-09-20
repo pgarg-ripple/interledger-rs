@@ -318,8 +318,8 @@ fn gets_multiple() {
             .get_accounts(account_ids)
             .and_then(move |accounts| {
                 // note reverse order is intentional
-                assert_eq!(accounts[0].client_address(), accs[1].client_address());
-                assert_eq!(accounts[1].client_address(), accs[0].client_address());
+                assert_eq!(accounts[0].ilp_address(), accs[1].ilp_address());
+                assert_eq!(accounts[1].ilp_address(), accs[0].ilp_address());
                 let _ = context;
                 Ok(())
             })

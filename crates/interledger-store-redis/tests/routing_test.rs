@@ -4,7 +4,6 @@ use bytes::Bytes;
 use common::*;
 use interledger_api::{AccountDetails, NodeStore};
 use interledger_ccp::RouteManagerStore;
-use interledger_ildcp::IldcpAccount;
 use interledger_packet::Address;
 use interledger_router::RouterStore;
 use interledger_service::{Account as AccountTrait, Username};
@@ -124,8 +123,8 @@ fn gets_accounts_to_send_routes_to() {
             .get_accounts_to_send_routes_to()
             .and_then(move |accounts| {
                 assert_eq!(
-                    *accounts[0].client_address(),
-                    Address::from_str("example.bob").unwrap()
+                    *accounts[0].ilp_address(),
+                    Address::from_str("example.alice.user1.bob").unwrap()
                 );
                 assert_eq!(accounts.len(), 1);
                 let _ = context;
@@ -142,7 +141,7 @@ fn gets_accounts_to_receive_routes_from() {
             .get_accounts_to_receive_routes_from()
             .and_then(move |accounts| {
                 assert_eq!(
-                    *accounts[0].client_address(),
+                    *accounts[0].ilp_address(),
                     Address::from_str("example.alice").unwrap()
                 );
                 assert_eq!(accounts.len(), 1);

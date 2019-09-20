@@ -11,7 +11,6 @@
 
 use bytes::Bytes;
 use futures::Future;
-use interledger_ildcp::IldcpAccount;
 use interledger_service::Account;
 use std::collections::HashMap;
 use std::{str::FromStr, string::ToString};

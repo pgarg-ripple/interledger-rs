@@ -8,7 +8,7 @@ use hyper::{
 };
 use interledger_btp::{connect_client, create_open_signup_server, parse_btp_url};
 use interledger_http::{HttpClientService, HttpServerService};
-use interledger_ildcp::{get_ildcp_info, IldcpAccount, IldcpResponse, IldcpService};
+use interledger_ildcp::{get_ildcp_info, IldcpResponse, IldcpService};
 use interledger_packet::{Address, ErrorCode, RejectBuilder};
 use interledger_router::Router;
 use interledger_service::{incoming_service_fn, outgoing_service_fn, OutgoingRequest, Username};
@@ -66,7 +66,7 @@ pub fn send_spsp_payment_btp(
                 code: ErrorCode::F02_UNREACHABLE,
                 message: &format!(
                     "No route found for address: {:?}",
-                    request.from.client_address(),
+                    request.from.ilp_address(),
                 )
                 .as_bytes(),
                 triggered_by: Some(&LOCAL_ILP_ADDRESS),
@@ -140,7 +140,7 @@ pub fn send_spsp_payment_http(
         outgoing_service_fn(|request: OutgoingRequest<Account>| {
             Err(RejectBuilder {
                 code: ErrorCode::F02_UNREACHABLE,
-                message: &format!("No outgoing route for: {:?}", request.from.client_address())
+                message: &format!("No outgoing route for: {:?}", request.from.ilp_address())
                     .as_bytes(),
                 triggered_by: Some(&LOCAL_ILP_ADDRESS),
                 data: &[],
@@ -193,7 +193,7 @@ pub fn run_spsp_server_btp(
         outgoing_service_fn(move |request: OutgoingRequest<Account>| {
             Err(RejectBuilder {
                 code: ErrorCode::F02_UNREACHABLE,
-                message: &format!("No outgoing route for: {:?}", request.from.client_address(),)
+                message: &format!("No outgoing route for: {:?}", request.from.ilp_address(),)
                     .as_bytes(),
                 triggered_by: ilp_addr.as_ref(),
                 data: &[],
@@ -236,9 +236,9 @@ pub fn run_spsp_server_btp(
             }
             debug!(
                 "SPSP server listening on {} with ILP address {}",
-                &address, client_address,
+                &address, ilp_address,
             );
-            let spsp_responder = SpspResponder::new(client_address, server_secret);
+            let spsp_responder = SpspResponder::new(ilp_address, server_secret);
             Server::bind(&address)
                 .serve(move || spsp_responder.clone())
                 .map_err(|e| eprintln!("Server error: {:?}", e))
@@ -253,7 +253,7 @@ pub fn run_spsp_server_http(
     auth_token: String,
     quiet: bool,
 ) -> impl Future<Item = (), Error = ()> {
-    let ilp_address = ildcp_info.client_address();
+    let ilp_address = ildcp_info.ilp_address();
     let ilp_address_clone = ilp_address.clone();
     if !quiet {
         println!(
@@ -328,7 +328,7 @@ pub fn run_moneyd_local(
     address: SocketAddr,
     ildcp_info: IldcpResponse,
 ) -> impl Future<Item = (), Error = ()> {
-    let ilp_address = ildcp_info.client_address();
+    let ilp_address = ildcp_info.ilp_address();
     let ilp_address_clone = ilp_address.clone();
     let store = InMemoryStore::default();
     // TODO this needs a reference to the BtpService so it can send outgoing packets

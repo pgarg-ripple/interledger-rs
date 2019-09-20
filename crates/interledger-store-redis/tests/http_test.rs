@@ -3,7 +3,6 @@ mod common;
 use common::*;
 use interledger_btp::BtpAccount;
 use interledger_http::{HttpAccount, HttpStore};
-use interledger_ildcp::IldcpAccount;
 use interledger_packet::Address;
 use interledger_service::Username;
 use std::str::FromStr;
@@ -18,7 +17,7 @@ fn gets_account_from_http_bearer_token() {
             )
             .and_then(move |account| {
                 assert_eq!(
-                    *account.client_address(),
+                    *account.ilp_address(),
                     Address::from_str("example.alice").unwrap()
                 );
                 // this account is in Dylan's connector
