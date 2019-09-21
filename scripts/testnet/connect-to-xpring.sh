@@ -181,6 +181,8 @@ set_up_localtunnel() {
     lt -p 7768 -s "${BTP_LT_SUBDOMAIN}" &>logs/lt_btp.log &
     printf "$!" > ${BTP_PID_FILE}
     colored_output 32 1 "done\n"
+    colored_output 33 21 "ILP over HTTP URL: $(get_localtunnel_url ${IOH_LT_SUBDOMAIN})\n"
+    colored_output 33 21 "BTP URL: $(get_localtunnel_url ${BTP_LT_SUBDOMAIN})\n"
 }
 
 get_localtunnel_url() {
