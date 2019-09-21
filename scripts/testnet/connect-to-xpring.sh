@@ -21,13 +21,14 @@ colored_output() {
 check_command() {
     local command=$1
     local install_name=$2
+    local install_command=$3
 
     printf "Checking if you have ${command}..."
     which ${command}
     if [ $? -eq 0 ]; then
         return 0
     else
-        error_and_exit "\nNot found. You have to install ${install_name} first."
+        error_and_exit "\nNot found. You have to install ${install_name} first.\nTry: ${install_command}"
     fi
 }
 
@@ -311,9 +312,9 @@ BTP_PID_FILE="logs/lt_btp.pid"
 export RUST_LOG=interledger=trace
 
 # check commands
-check_command "lt" "localtunnel"
-check_command "jq" "jq"
-check_command "openssl" "openssl"
+check_command "lt" "localtunnel" "npm install -g localtunnel"
+check_command "jq" "jq" "brew install jq"
+check_command "openssl" "openssl" "brew install openssl"
 
 if [ "${CLEAR_CACHE}" = "1" ]; then
     if [ -e "${CONFIG_NAME}" ]; then
