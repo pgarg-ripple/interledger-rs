@@ -315,6 +315,7 @@ export RUST_LOG=interledger=trace
 check_command "lt" "localtunnel" "npm install -g localtunnel"
 check_command "jq" "jq" "brew install jq"
 check_command "openssl" "openssl" "brew install openssl"
+check_command "redis-server" "redis" "brew install redis"
 
 if [ "${CLEAR_CACHE}" = "1" ]; then
     if [ -e "${CONFIG_NAME}" ]; then
