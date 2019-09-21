@@ -183,6 +183,10 @@ set_up_localtunnel() {
     colored_output 32 1 "done\n"
 }
 
+get_localtunnel_url() {
+    printf "https://%s.localtunnel.me" "${1}"
+}
+
 stop_services() {
     printf "Shutting down services..."
     free_ports
