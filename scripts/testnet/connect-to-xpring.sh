@@ -176,9 +176,9 @@ set_up_localtunnel() {
     ilp_address=${ilp_address//\./-}
     IOH_LT_SUBDOMAIN="ioh-${ilp_address}"
     BTP_LT_SUBDOMAIN="btp-${ilp_address}"
-    lt -p 7770 -s "${IOH_LT_SUBDOMAIN}" &>logs/lt_ilp_over_http.log || error_and_exit "Could not open a tunnel to 7770." &
+    lt -p 7770 -s "${IOH_LT_SUBDOMAIN}" &>logs/lt_ilp_over_http.log &
     printf "$!" > ${IOH_PID_FILE}
-    lt -p 7768 -s "${BTP_LT_SUBDOMAIN}" &>logs/lt_btp.log || error_and_exit "Could not open a tunnel to 7768." &
+    lt -p 7768 -s "${BTP_LT_SUBDOMAIN}" &>logs/lt_btp.log &
     printf "$!" > ${BTP_PID_FILE}
     colored_output 32 1 "done\n"
 }
