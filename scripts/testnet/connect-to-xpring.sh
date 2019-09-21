@@ -187,7 +187,7 @@ set_up_localtunnel() {
 }
 
 get_localtunnel_url() {
-    printf "https://%s.localtunnel.me" "${1}"
+    printf "http://%s.localtunnel.me" "${1}"
 }
 
 stop_services() {
