@@ -316,6 +316,7 @@ check_command "lt" "localtunnel" "npm install -g localtunnel"
 check_command "jq" "jq" "brew install jq"
 check_command "openssl" "openssl" "brew install openssl"
 check_command "redis-server" "redis" "brew install redis"
+check_command "cargo" "Rust" "curl https://sh.rustup.rs -sSf | sh"
 
 if [ "${CLEAR_CACHE}" = "1" ]; then
     if [ -e "${CONFIG_NAME}" ]; then
