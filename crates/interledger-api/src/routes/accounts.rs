@@ -1,21 +1,27 @@
 use crate::{http_retry::Client, AccountDetails, AccountSettings, ApiError, NodeStore};
 use bytes::Bytes;
 use futures::{
-    future::{err, ok, result, Either},
+    future::{err, join_all, ok, Either},
     Future, Stream,
 };
+use interledger_btp::{connect_to_service_account, BtpAccount, BtpOutgoingService};
+use interledger_ccp::{CcpRoutingAccount, Mode, RouteControlRequest, RoutingRelation};
 use interledger_http::{HttpAccount, HttpStore};
-use interledger_ildcp::IldcpAccount;
+use interledger_ildcp::IldcpRequest;
+use interledger_ildcp::IldcpResponse;
 use interledger_router::RouterStore;
-use interledger_service::{Account, AuthToken, IncomingService, Username};
+use interledger_service::{
+    Account, AddressStore, AuthToken, IncomingService, OutgoingRequest, OutgoingService, Username,
+};
 use interledger_service_util::{BalanceStore, ExchangeRateStore};
+use interledger_settlement::SettlementAccount;
 use interledger_spsp::{pay, SpspResponder};
 use interledger_stream::{PaymentNotification, StreamNotificationsStore};
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::convert::TryFrom;
 use std::time::Duration;
-use url::Url;
 use warp::{self, Filter};
 
 const MAX_RETRIES: usize = 10;
@@ -27,22 +33,34 @@ struct SpspPayRequest {
     source_amount: u64,
 }
 
-pub fn accounts_api<I, S, A>(
+pub fn accounts_api<I, O, S, A, B>(
     server_secret: Bytes,
     admin_api_token: String,
     default_spsp_account: Option<Username>,
     incoming_handler: I,
+    outgoing_handler: O,
+    btp: BtpOutgoingService<B, A>,
     store: S,
 ) -> warp::filters::BoxedFilter<(impl warp::Reply,)>
 where
     I: IncomingService<A> + Clone + Send + Sync + 'static,
+    O: OutgoingService<A> + Clone + Send + Sync + 'static,
+    B: OutgoingService<A> + Clone + Send + Sync + 'static,
     S: NodeStore<Account = A>
         + HttpStore<Account = A>
         + BalanceStore<Account = A>
         + StreamNotificationsStore<Account = A>
         + ExchangeRateStore
         + RouterStore,
-    A: Account + IldcpAccount + HttpAccount + Serialize + 'static,
+    A: BtpAccount
+        + CcpRoutingAccount
+        + SettlementAccount
+        + Account
+        + HttpAccount
+        + Serialize
+        + Send
+        + Sync
+        + 'static,
 {
     // TODO can we make any of the Filters const or put them in lazy_static?
 
@@ -115,61 +133,26 @@ where
         .boxed();
 
     // POST /accounts
-    let http_client = Client::new(DEFAULT_HTTP_TIMEOUT, MAX_RETRIES);
+    let btp_clone = btp.clone();
+    let outgoing_handler_clone = outgoing_handler.clone();
     let post_accounts = warp::post2()
         .and(accounts_index)
         .and(admin_only.clone())
         .and(warp::body::json())
         .and(with_store.clone())
         .and_then(move |account_details: AccountDetails, store: S| {
-            let settlement_engine_url = account_details.settlement_engine_url.clone();
-            let http_client = http_client.clone();
-            store.insert_account(account_details)
-                .map_err(|_| {
-                    warp::reject::custom(ApiError::InternalServerError)
+            let store_clone = store.clone();
+            let handler = outgoing_handler_clone.clone();
+            let btp = btp_clone.clone();
+            store
+                .insert_account(account_details)
+                .map_err(|_| warp::reject::custom(ApiError::InternalServerError))
+                .and_then(move |account| {
+                    connect_to_external_services(handler, account, store_clone, btp)
                 })
-                .and_then(move |account: A| {
-                    let http_client = http_client.clone();
-                    // Register the account with the settlement engine
-                    // if a settlement_engine_url was configured on the account
-                    if let Some(se_url) = settlement_engine_url {
-                        let id = account.id();
-                        Either::A(result(Url::parse(&se_url))
-                            .map_err(|_| {
-                                // TODO include a more specific error message
-                                warp::reject::custom(ApiError::BadRequest)
-                            })
-                            .and_then(move |se_url| {
-                                let http_client = http_client.clone();
-                                trace!(
-                                    "Sending account {} creation request to settlement engine: {:?}",
-                                    id,
-                                    se_url.clone()
-                                );
-                                http_client.create_engine_account(se_url, id)
-                                    .and_then(move |status_code| {
-                                        if status_code.is_success() {
-                                            trace!("Account {} created on the SE", id);
-                                        } else {
-                                            error!("Error creating account. Settlement engine responded with HTTP code: {}", status_code);
-                                        }
-                                        Ok(())
-                                    })
-                                .map_err(|_| {
-                                    warp::reject::custom(ApiError::InternalServerError)
-                                })
-                                .and_then(move |_| {
-                                    Ok(account)
-                                })
-                            }))
-                    } else {
-                        Either::B(ok(account))
-                    }
-                })
-                .and_then(|account: A| {
-                    Ok(warp::reply::json(&account))
-                })
-        }).boxed();
+                .and_then(|account: A| Ok(warp::reply::json(&account)))
+        })
+        .boxed();
 
     // GET /accounts
     let get_accounts = warp::get2()
@@ -192,11 +175,17 @@ where
         .and(warp::body::json())
         .and(with_store.clone())
         .and_then(
-            |id: A::AccountId, account_details: AccountDetails, store: S| {
+            move |id: A::AccountId, account_details: AccountDetails, store: S| {
+                let store_clone = store.clone();
+                let handler = outgoing_handler.clone();
+                let btp = btp.clone();
                 store
                     .update_account(id, account_details)
                     .map_err(move |_| warp::reject::custom(ApiError::InternalServerError))
-                    .and_then(move |account| Ok(warp::reply::json(&account)))
+                    .and_then(move |account| {
+                        connect_to_external_services(handler, account, store_clone, btp)
+                    })
+                    .and_then(|account: A| Ok(warp::reply::json(&account)))
             },
         )
         .boxed();
@@ -346,7 +335,7 @@ where
                 .and_then(move |accounts| {
                     // TODO return the response without instantiating an SpspResponder (use a simple fn)
                     Ok(SpspResponder::new(
-                        accounts[0].client_address().clone(),
+                        accounts[0].ilp_address().clone(),
                         server_secret_clone.clone(),
                     )
                     .generate_http_response())
@@ -384,7 +373,7 @@ where
                         .and_then(move |account| {
                             // TODO return the response without instantiating an SpspResponder (use a simple fn)
                             Ok(SpspResponder::new(
-                                account.client_address().clone(),
+                                account.ilp_address().clone(),
                                 server_secret_clone.clone(),
                             )
                             .generate_http_response())
@@ -408,4 +397,149 @@ where
         .or(incoming_payment_notifications)
         .or(post_payments)
         .boxed()
+}
+
+fn get_address_from_parent_and_update_routes<S, A, T>(
+    mut service: S,
+    parent: A,
+    store: T,
+) -> impl Future<Item = (), Error = ()>
+where
+    S: OutgoingService<A> + Clone + Send + Sync + 'static,
+    A: CcpRoutingAccount + Clone + Send + Sync + 'static,
+    T: AddressStore + Clone + Send + Sync + 'static,
+{
+    let prepare = IldcpRequest {}.to_prepare();
+    service
+        .send_request(OutgoingRequest {
+            from: parent.clone(), // Does not matter what we put here, they will get the account from the HTTP/BTP credentials
+            to: parent.clone(),
+            prepare,
+            original_amount: 0,
+        })
+        .map_err(|err| error!("Error getting ILDCP info: {:?}", err))
+        .and_then(|fulfill| {
+            let response = IldcpResponse::try_from(fulfill.into_data().freeze()).map_err(|err| {
+                error!(
+                    "Unable to parse ILDCP response from fulfill packet: {:?}",
+                    err
+                );
+            });
+            debug!("Got ILDCP response: {:?}", response);
+            let ilp_address = match response {
+                Ok(info) => info.ilp_address(),
+                Err(_) => return err(()),
+            };
+            ok(ilp_address)
+        })
+        .and_then(move |ilp_address| {
+            // TODO we may want to make this trigger the CcpRouteManager to request
+            let prepare = RouteControlRequest {
+                mode: Mode::Sync,
+                last_known_epoch: 0,
+                last_known_routing_table_id: [0; 16],
+                features: Vec::new(),
+            }
+            .to_prepare();
+            debug!("Asking for routes from {:?}", parent.clone());
+            join_all(vec![
+                // Update our store's address
+                store.set_ilp_address(ilp_address),
+                // Get the parent's routes for us
+                Box::new(
+                    service
+                        .send_request(OutgoingRequest {
+                            from: parent.clone(),
+                            to: parent.clone(),
+                            original_amount: prepare.amount(),
+                            prepare: prepare.clone(),
+                        })
+                        .and_then(move |_| Ok(()))
+                        .map_err(move |err| {
+                            error!("Got error when trying to update routes {:?}", err)
+                        }),
+                ),
+            ])
+        })
+        .and_then(move |_| Ok(()))
+}
+
+// Helper function which gets called whenever a new account is added or
+// modified.
+// Performed actions:
+// 1. If they have a BTP uri configured: connect to their BTP socket
+// 2. If they are a parent:
+// 2a. Perform an ILDCP Request to get the address assigned to us by them, and
+// update our store's address to that value
+// 2b. Perform a RouteControl Request to make them send us any new routes
+// 3. If they have a settlement engine endpoitn configured: Make a POST to the
+//    engine's account creation endpoint with the account's id
+fn connect_to_external_services<S, A, T, B>(
+    service: S,
+    account: A,
+    store: T,
+    btp: BtpOutgoingService<B, A>,
+) -> impl Future<Item = A, Error = warp::reject::Rejection>
+where
+    S: OutgoingService<A> + Clone + Send + Sync + 'static,
+    A: CcpRoutingAccount + BtpAccount + SettlementAccount + Clone + Send + Sync + 'static,
+    T: AddressStore + Clone + Send + Sync + 'static,
+    B: OutgoingService<A> + Clone + 'static,
+{
+    // Try to connect to the account's BTP socket if they have
+    // one configured
+    let btp_connect_fut = if account.get_btp_uri().is_some() {
+        Either::A(
+            connect_to_service_account(account.clone(), true, btp)
+                .map_err(|_| warp::reject::custom(ApiError::InternalServerError)),
+        )
+    } else {
+        Either::B(ok(()))
+    };
+
+    btp_connect_fut.and_then(move |_| {
+    // If we added a parent, get the address assigned to us by
+    // them and update all of our routes
+    let get_ilp_address_fut = if account.routing_relation() == RoutingRelation::Parent {
+        Either::A(
+            get_address_from_parent_and_update_routes(service, account.clone(), store)
+            .map_err(|_| {
+                warp::reject::custom(ApiError::InternalServerError)
+            })
+        )
+    } else {
+        Either::B(ok(()))
+    };
+
+    // Register the account with the settlement engine
+    // if a settlement_engine_url was configured on the account
+    get_ilp_address_fut.and_then(move |_|
+    if let Some(se_details) = account.settlement_engine_details() {
+        let se_url = se_details.url;
+        let id = account.id();
+        let http_client = Client::new(DEFAULT_HTTP_TIMEOUT, MAX_RETRIES);
+        trace!(
+            "Sending account {} creation request to settlement engine: {:?}",
+            id,
+            se_url.clone()
+        );
+        Either::A(
+            http_client.create_engine_account(se_url, id)
+            .map_err(|_| {
+                warp::reject::custom(ApiError::InternalServerError)
+            })
+            .and_then(move |status_code| {
+                if status_code.is_success() {
+                    trace!("Account {} created on the SE", id);
+                } else {
+                    error!("Error creating account. Settlement engine responded with HTTP code: {}", status_code);
+                }
+                Ok(())
+            })
+            .and_then(move |_| {
+                Ok(account)
+            }))
+    } else {
+        Either::B(ok(account))
+    })})
 }

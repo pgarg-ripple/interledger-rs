@@ -1,10 +1,9 @@
 use bytes::Bytes;
 use futures::Future;
 use interledger_http::{HttpAccount, HttpServer as IlpOverHttpServer, HttpStore};
-use interledger_ildcp::IldcpAccount;
 use interledger_packet::Address;
 use interledger_router::RouterStore;
-use interledger_service::{Account, IncomingService, Username};
+use interledger_service::{Account, AddressStore, IncomingService, OutgoingService, Username};
 use interledger_service_util::{BalanceStore, ExchangeRateStore};
 use interledger_settlement::{SettlementAccount, SettlementStore};
 use interledger_stream::StreamNotificationsStore;
@@ -16,10 +15,12 @@ use std::{
 };
 use warp::{self, Filter};
 mod routes;
+use interledger_btp::{BtpAccount, BtpOutgoingService};
+use interledger_ccp::CcpRoutingAccount;
 
 pub(crate) mod http_retry;
 
-pub trait NodeStore: Clone + Send + Sync + 'static {
+pub trait NodeStore: AddressStore + Clone + Send + Sync + 'static {
     type Account: Account;
 
     fn insert_account(
@@ -80,9 +81,9 @@ pub struct AccountSettings {
 }
 
 /// The Account type for the RedisStore.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountDetails {
-    pub ilp_address: Address,
+    pub ilp_address: Option<Address>,
     pub username: Username,
     pub asset_code: String,
     pub asset_scale: u8,
@@ -125,15 +126,21 @@ impl Display for ApiError {
 
 impl StdError for ApiError {}
 
-pub struct NodeApi<S, I> {
+pub struct NodeApi<S, I, O, B, A: Account> {
     store: S,
     admin_api_token: String,
     default_spsp_account: Option<Username>,
     incoming_handler: I,
+    // The outgoing service is included so that the API can send outgoing
+    // requests to specific accounts (namely ILDCP requests)
+    outgoing_handler: O,
+    // The BTP service is included here so that we can add a new client
+    // connection when an account is added with BTP details
+    btp: BtpOutgoingService<B, A>,
     server_secret: Bytes,
 }
 
-impl<S, I, A> NodeApi<S, I>
+impl<S, I, O, B, A> NodeApi<S, I, O, B, A>
 where
     S: NodeStore<Account = A>
         + HttpStore<Account = A>
@@ -143,19 +150,33 @@ where
         + RouterStore
         + ExchangeRateStore,
     I: IncomingService<A> + Clone + Send + Sync + 'static,
-    A: Account + HttpAccount + IldcpAccount + SettlementAccount + Serialize + Send + Sync + 'static,
+    O: OutgoingService<A> + Clone + Send + Sync + 'static,
+    B: OutgoingService<A> + Clone + Send + Sync + 'static,
+    A: BtpAccount
+        + CcpRoutingAccount
+        + Account
+        + HttpAccount
+        + SettlementAccount
+        + Serialize
+        + Send
+        + Sync
+        + 'static,
 {
     pub fn new(
         server_secret: Bytes,
         admin_api_token: String,
         store: S,
         incoming_handler: I,
+        outgoing_handler: O,
+        btp: BtpOutgoingService<B, A>,
     ) -> Self {
         NodeApi {
             store,
             admin_api_token,
             default_spsp_account: None,
             incoming_handler,
+            outgoing_handler,
+            btp,
             server_secret,
         }
     }
@@ -177,6 +198,8 @@ where
                 self.admin_api_token.clone(),
                 self.default_spsp_account,
                 self.incoming_handler,
+                self.outgoing_handler,
+                self.btp,
                 self.store.clone(),
             ))
             .or(routes::node_settings_api(self.admin_api_token, self.store))

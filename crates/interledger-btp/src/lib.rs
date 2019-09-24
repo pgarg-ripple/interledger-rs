@@ -17,7 +17,7 @@ mod packet;
 mod server;
 mod service;
 
-pub use self::client::{connect_client, parse_btp_url};
+pub use self::client::{connect_client, connect_to_service_account, parse_btp_url};
 pub use self::server::{create_open_signup_server, create_server};
 pub use self::service::{BtpOutgoingService, BtpService};
 use interledger_packet::Address;
@@ -84,6 +84,7 @@ mod client_server {
 
     lazy_static! {
         pub static ref ALICE: Username = Username::from_str("alice").unwrap();
+        pub static ref EXAMPLE_ADDRESS: Address = Address::from_str("example.alice").unwrap();
     }
 
     #[derive(Clone, Debug)]
@@ -103,6 +104,18 @@ mod client_server {
 
         fn username(&self) -> &Username {
             &ALICE
+        }
+
+        fn asset_scale(&self) -> u8 {
+            9
+        }
+
+        fn asset_code(&self) -> &str {
+            "XYZ"
+        }
+
+        fn ilp_address(&self) -> &Address {
+            &EXAMPLE_ADDRESS
         }
     }
 
