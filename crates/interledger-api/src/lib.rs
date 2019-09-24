@@ -142,6 +142,31 @@ impl Display for ApiError {
 
 impl StdError for ApiError {}
 
+use warp::{Reply, reply::Response};
+
+#[derive(Clone, Debug)]
+pub struct ApiErrorStruct {
+    pub r#type: &'static str,
+    pub title: &'static str,
+    pub status: http::StatusCode,
+    pub detail: Option<String>,
+    pub instance: Option<String>,
+}
+
+impl Display for ApiErrorStruct {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
+    }
+}
+
+impl Reply for ApiErrorStruct {
+    fn into_response(self) -> Response {
+        unimplemented!()
+    }
+}
+
+impl StdError for ApiErrorStruct {}
+
 pub struct NodeApi<S, I, O, B, A: Account> {
     store: S,
     admin_api_token: String,
@@ -220,6 +245,12 @@ where
             ))
             .or(routes::node_settings_api(self.admin_api_token, self.store))
             .recover(|err: warp::Rejection| {
+                if let Some(api_error) = err.find_cause::<ApiErrorStruct>() {
+                    Ok(api_error.clone())
+                } else {
+                    Err(err)
+                }
+                /*
                 if let Some(&err) = err.find_cause::<ApiError>() {
                     let code = match err {
                         ApiError::AccountNotFound => warp::http::StatusCode::NOT_FOUND,
@@ -233,6 +264,7 @@ where
                 } else {
                     Err(err)
                 }
+                */
             })
             .with(warp::log("interledger-api"))
             .boxed()
